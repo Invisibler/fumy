@@ -18,7 +18,7 @@ from html import escape
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
-
+from background import keep_alive
 # Сторонние библиотеки
 import aiohttp
 import firebase_admin
@@ -8004,6 +8004,8 @@ def main():
     application.add_handler(MessageHandler(filters.Sticker.ALL | filters.ANIMATION, handle_sticker))
 
     logger.info("Бот запущен и ожидает сообщений.")
+    keep_alive()
+  
     application.run_polling()
 
 if __name__ == "__main__":
