@@ -277,22 +277,68 @@ def save_chat_history_for_id(chat_id: str, messages: list):
 
         
 def save_game_history_for_id(chat_id: str, messages: list):
-    ref = db.reference(f'games_histories/{chat_id}')
-    existing = ref.get() or []
-    new_messages = [msg for msg in messages if msg not in existing]
-    if new_messages:
-        ref.set(existing + new_messages)
+    """
+    Сохраняет историю игры для заданного chat_id в Firebase Realtime Database.
+    Предварительно загружает текущие данные, чтобы избежать перезаписи
+    и сохранить только новые уникальные сообщения.
+    """
+    try:
+        if not firebase_admin._DEFAULT_APP_NAME:
+            logger.error("Firebase приложение не инициализировано. Невозможно сохранить историю игры.")
+            return
+
+        ref = db.reference(f'games_histories/{chat_id}')
+        current_data = ref.get()
+        if current_data is None:
+            current_data = []
+
+        new_messages = [msg for msg in messages if not is_duplicate(msg, current_data)]
+        if new_messages:
+            updated_data = current_data + new_messages
+            ref.set(updated_data)
+            logger.info(f"История игры для chat_id {chat_id} успешно обновлена ({len(new_messages)} новых сообщений).")
+        else:
+            logger.info(f"Нет новых сообщений для сохранения в истории игры chat_id {chat_id}.")
+
+    except firebase_admin.exceptions.FirebaseError as e:
+        logger.error(f"Ошибка Firebase при сохранении истории игры для chat_id {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при сохранении истории игры в Firebase: {e}")
 
 def save_chat_history_full_for_id(chat_id: str, messages: list):
+    """
+    Сохраняет полную историю чата для заданного chat_id в Firebase Realtime Database.
+    Сохраняет только уникальные сообщения. Ограничивает сохранение только для разрешённых чатов.
+    """
     allowed_chats = {"-1001475512721", "6217936347", "-1002158426902", "-1002695243416", "-1002535731403"}
+
     if chat_id not in allowed_chats:
-        print(f"[SKIP] Чат {chat_id} не входит в список разрешённых.")
+        logger.info(f"[SKIP] Чат {chat_id} не входит в список разрешённых.")
         return
-    ref = db.reference(f'chat_histories_full/{chat_id}')
-    existing = ref.get() or []
-    new_messages = [msg for msg in messages if msg not in existing]
-    if new_messages:
-        ref.set(existing + new_messages)
+
+    try:
+        if not firebase_admin._DEFAULT_APP_NAME:
+            logger.error("Firebase приложение не инициализировано. Невозможно сохранить полную историю чата.")
+            return
+
+        ref = db.reference(f'chat_histories_full/{chat_id}')
+        current_data = ref.get()
+        if current_data is None:
+            current_data = []
+
+        new_messages = [msg for msg in messages if not is_duplicate(msg, current_data)]
+        if new_messages:
+            updated_data = current_data + new_messages
+            ref.set(updated_data)
+            logger.info(f"Полная история чата для chat_id {chat_id} успешно обновлена ({len(new_messages)} новых сообщений).")
+        else:
+            logger.info(f"Нет новых сообщений для сохранения в полной истории чата chat_id {chat_id}.")
+
+    except firebase_admin.exceptions.FirebaseError as e:
+        logger.error(f"Ошибка Firebase при сохранении полной истории чата для chat_id {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при сохранении полной истории чата в Firebase: {e}")
+
 
 
 
