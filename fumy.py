@@ -220,75 +220,93 @@ def get_relevant_context(chat_id):
 
 
 
-def load_chat_history():
-    ref = db.reference('chat_histories')
-    data = ref.get()
-    return data or {}
+def load_chat_history_by_id(chat_id: str):
+    ref = db.reference(f'chat_histories/{chat_id}')
+    return ref.get() or []
 
-def load_game_history():
-    ref = db.reference('games_histories')
-    data = ref.get()
-    return data or {}
+def load_game_history_by_id(chat_id: str):
+    ref = db.reference(f'games_histories/{chat_id}')
+    return ref.get() or []
 
-def load_chat_history_full():
-    ref = db.reference('chat_histories_full')
-    data = ref.get()
-    return data or {}
+def load_chat_history_full_by_id(chat_id: str):
+    ref = db.reference(f'chat_histories_full/{chat_id}')
+    return ref.get() or []
 
 
+def is_duplicate(msg, existing):
+    return any(
+        m.get('message') == msg.get('message') and
+        m.get('role') == msg.get('role') and
+        m.get('timestamp') == msg.get('timestamp')
+        for m in existing
+    )
 
-def save_chat_history(chat_histories):
-    ref = db.reference('chat_histories')
 
-    for chat_id, messages in chat_histories.items():
-        chat_ref = ref.child(str(chat_id))
-        existing = chat_ref.get() or []
 
-        new_messages = [msg for msg in messages if msg not in existing]
+def save_chat_history_for_id(chat_id: str, messages: list):
+    """
+    Сохраняет историю чата для заданного chat_id в Firebase Realtime Database.
+    Предварительно загружает текущие данные, чтобы избежать перезаписи
+    и сохранить только новые уникальные сообщения.
+    """
+    try:
+        if not firebase_admin._DEFAULT_APP_NAME:
+            logger.error("Firebase приложение не инициализировано. Невозможно сохранить историю чата.")
+            return
 
+        ref = db.reference(f'chat_histories/{chat_id}')
+
+        # Загрузка актуальных данных перед сохранением
+        current_data = ref.get()
+        if current_data is None:
+            current_data = []
+
+        # Добавление только новых сообщений, избегая дублирования
+        new_messages = [msg for msg in messages if not is_duplicate(msg, current_data)]
         if new_messages:
-            chat_ref.set(existing + new_messages)
-
-
-def save_game_history(games_history):
-    ref = db.reference('games_histories')
-
-    for chat_id, messages in games_history.items():
-        chat_ref = ref.child(str(chat_id))
-        existing = chat_ref.get() or []
-
-        new_messages = [msg for msg in messages if msg not in existing]
-
-        if new_messages:
-            chat_ref.set(existing + new_messages)
-
-
-def save_chat_history_full(chat_histories):
-    allowed_chats = {"-1001475512721", "6217936347", "-1002158426902", "-1002695243416", "-1002535731403"}
-    ref = db.reference('chat_histories_full')
-
-    for chat_id, messages in chat_histories.items():
-        chat_id_str = str(chat_id)
-        if chat_id_str not in allowed_chats:
-            print(f"[SKIP] Чат {chat_id_str} не входит в список разрешённых.")
-            continue
-
-        chat_ref = ref.child(chat_id_str)
-        existing = chat_ref.get() or []
-
-        new_messages = [msg for msg in messages if msg not in existing]
-
-        if new_messages:
-            print(f"[INFO] Добавлено {len(new_messages)} новых сообщений в чат {chat_id_str}.")
-            chat_ref.set(existing + new_messages)
+            updated_data = current_data + new_messages
+            ref.set(updated_data)
+            logger.info(f"История чата для chat_id {chat_id} успешно обновлена ({len(new_messages)} новых сообщений).")
         else:
-            print(f"[INFO] Нет новых сообщений для чата {chat_id_str}.")
+            logger.info(f"Нет новых сообщений для сохранения в истории чата chat_id {chat_id}.")
 
-# Загрузка истории чатов при старте
-games_histories = load_game_history()
-# Загрузка истории чатов при старте
-chat_histories = load_chat_history()
+    except firebase_admin.exceptions.FirebaseError as e:
+        logger.error(f"Ошибка Firebase при сохранении истории чата для chat_id {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при сохранении истории чата в Firebase: {e}")
 
+        
+def save_game_history_for_id(chat_id: str, messages: list):
+    ref = db.reference(f'games_histories/{chat_id}')
+    existing = ref.get() or []
+    new_messages = [msg for msg in messages if msg not in existing]
+    if new_messages:
+        ref.set(existing + new_messages)
+
+def save_chat_history_full_for_id(chat_id: str, messages: list):
+    allowed_chats = {"-1001475512721", "6217936347", "-1002158426902", "-1002695243416", "-1002535731403"}
+    if chat_id not in allowed_chats:
+        print(f"[SKIP] Чат {chat_id} не входит в список разрешённых.")
+        return
+    ref = db.reference(f'chat_histories_full/{chat_id}')
+    existing = ref.get() or []
+    new_messages = [msg for msg in messages if msg not in existing]
+    if new_messages:
+        ref.set(existing + new_messages)
+
+
+
+
+
+
+def get_chat_history(chat_id):
+    if chat_id not in chat_histories:
+        chat_histories[chat_id] = load_chat_history_by_id(chat_id)
+    return chat_histories[chat_id]
+def get_game_history(chat_id):
+    if chat_id not in games_histories:
+        games_histories[chat_id] = load_game_history_by_id(chat_id)
+    return games_histories[chat_id]    
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Пользователь запустил бота с командой /start")
@@ -296,36 +314,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def fumy_game_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global games_histories, relevant_context
-    chat_id = str(update.message.chat_id)
-    
-    # Удаляем из локального словаря
-    if chat_id in games_histories:
-        del games_histories[chat_id]
-    if chat_id in relevant_context:
-        del relevant_context[chat_id]
+    chat_id = str(update.effective_chat.id)  # Надёжнее, чем message.chat_id
+
+    # Удаляем из памяти
+    games_histories.pop(chat_id, None)
+    relevant_context.pop(chat_id, None)
 
     # Удаляем из Firebase
     db.reference(f'games_histories/{chat_id}').delete()
 
     await update.message.reply_text("История сообщений текущей игры очищена. Бот готов к новой игре!")
 
-
+# Сброс всей истории чата
 async def fumy_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global chat_histories, relevant_context
-    chat_id = str(update.message.chat_id)
-    
-    # Удаляем из локального словаря
-    if chat_id in chat_histories:
-        del chat_histories[chat_id]
-    if chat_id in relevant_context:
-        del relevant_context[chat_id]
+    chat_id = str(update.effective_chat.id)
+
+    # Удаляем из памяти
+    chat_histories.pop(chat_id, None)
+    relevant_context.pop(chat_id, None)
 
     # Удаляем из Firebase
     db.reference(f'chat_histories/{chat_id}').delete()
 
     await update.message.reply_text("История сообщений чата полностью очищена. Бот готов к диалогу с чистого листа!")
   
+
+
 
 
 async def send_reply_with_limit(text, max_length=4096):
@@ -1524,8 +1538,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         username = update.message.from_user.username or update.message.from_user.first_name
         user_name = user_names_map.get(username, username)
         logger.info("Фоновая обработка видео от пользователя: %s", user_name)
-
-        chat_history = chat_histories.setdefault(chat_id, [])
+        chat_history = get_chat_history(chat_id)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         relevant_messages = get_relevant_context(chat_id)
@@ -1567,7 +1580,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "reply_to": user_name if update.message.reply_to_message else None,
             "timestamp": current_time
         })
-        save_chat_history(chat_histories)
+        save_chat_history_for_id(chat_id, chat_histories[chat_id])
         add_to_relevant_context(chat_id, {
             "role": user_name,
             "message": response_text,
@@ -1596,7 +1609,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "reply_to": user_name,
                 "timestamp": current_time
             })
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
             add_to_relevant_context(chat_id, {
                 "role": "Бот",
                 "message": response,
@@ -1649,7 +1662,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_name = user_names_map.get(username, username)
         logger.info("Фоновая обработка аудио от пользователя: %s", user_name)
 
-        chat_history = chat_histories.setdefault(chat_id, [])
+        chat_history = get_chat_history(chat_id)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         relevant_messages = get_relevant_context(chat_id)
@@ -1691,7 +1704,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "reply_to": user_name if update.message.reply_to_message else None,
             "timestamp": current_time
         })
-        save_chat_history(chat_histories)
+        save_chat_history_for_id(chat_id, chat_histories[chat_id])
         add_to_relevant_context(chat_id, {
             "role": user_name,
             "message": response_text,
@@ -1720,7 +1733,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "reply_to": user_name,
                 "timestamp": current_time
             })
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
             add_to_relevant_context(chat_id, {
                 "role": "Бот",
                 "message": response,
@@ -1841,14 +1854,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role_key = chat_roles.get(int(chat_id), "role0")
     
     # Выбираем соответствующую историю на основе роли
-    if role_key and role_key != "role0":
-        history_dict = games_histories  # Используем историю для игр
-        save_history_func = save_game_history  # Функция сохранения для игр
-        load_history_func = load_game_history  # Функция загрузки для игр
+    if role_key != "role0":
+        history_dict = games_histories
+        save_history_func = save_game_history_for_id
+        load_history_func = load_game_history_by_id
     else:
-        history_dict = chat_histories  # Используем обычную историю чатов
-        save_history_func = save_chat_history  # Функция сохранения для чатов
-        load_history_func = load_chat_history  # Функция загрузки для чатов
+        history_dict = chat_histories
+        save_history_func = save_chat_history_for_id
+        load_history_func = load_chat_history_by_id
+
+    # Загружаем историю только если нужно
+    if chat_id not in history_dict:
+        history_dict[chat_id] = load_history_func(chat_id)
 
     # Инициализируем историю, если её нет
     history_dict.setdefault(chat_id, [])
@@ -2005,12 +2022,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "timestamp": message_time.strftime("%Y-%m-%d %H:%M:%S")
             }
             history_dict[chat_id].append(message)
-            save_chat_history_full(history_dict)            
+            save_chat_history_full_for_id(chat_id, history_dict[chat_id])            
             add_to_relevant_context(chat_id, message)
             # Удаляем самое старое сообщение, если история слишком длинная
             if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                 history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]            
-            save_history_func(history_dict)
+            save_history_func(chat_id, history_dict[chat_id])
 
 
 
@@ -2053,11 +2070,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     history_dict[chat_id].append(message)
                     add_to_relevant_context(chat_id, message)
-                    save_chat_history_full(history_dict)
+                    save_chat_history_full_for_id(chat_id, history_dict[chat_id])
 
                     if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                         history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
-                    save_history_func(history_dict)
+                    save_history_func(chat_id, history_dict[chat_id])
 
                     try:
                         sent_message = await update.message.reply_text(response_text[:4096])
@@ -2132,7 +2149,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
 
-                        save_history_func(history_dict)
+                        save_history_func(chat_id, history_dict[chat_id])
 
                         add_to_relevant_context(chat_id, {
                             "role": "Бот",
@@ -2190,7 +2207,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                         if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
-                        save_history_func(history_dict)
+                        save_history_func(chat_id, history_dict[chat_id])
 
                         await waiting_message.delete()
                         await update.message.reply_text(response_text)
@@ -2241,7 +2258,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                         if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
-                        save_history_func(history_dict)
+                        save_history_func(chat_id, history_dict[chat_id])
 
                         await waiting_message.delete()
                         for part in split_message(response_text):
@@ -2308,7 +2325,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                         if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
-                        save_history_func(history_dict)
+                        save_history_func(chat_id, history_dict[chat_id])
 
                         await update.message.reply_text(response_text)
                         await waiting_message.delete()
@@ -2374,7 +2391,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                         if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
-                        save_history_func(history_dict)
+                        save_history_func(chat_id, history_dict[chat_id])
 
                         await update.message.reply_text(response_text)
                         await waiting_message.delete()
@@ -2416,13 +2433,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         history_dict[chat_id].append(message)
         add_to_relevant_context(chat_id, message)
-        save_chat_history_full(history_dict)
+        save_chat_history_full_for_id(chat_id, history_dict[chat_id])
         # Удаляем самое старое сообщение, если история слишком длинная
         if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
 
         logger.info("Добавлено сообщение в историю без реакции: %s", history_dict[chat_id])
-        save_history_func(history_dict)  # Сохраняем историю
+        save_history_func(chat_id, history_dict[chat_id])  # Сохраняем историю
 
         # Редкая вероятность спонтанного ответа
         if random.random() < 0.001:
@@ -2458,7 +2475,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "reply_to": None,
                         "timestamp": current_time
                     })
-                    save_chat_history(chat_histories)
+                    save_chat_history_for_id(chat_id, chat_histories[chat_id])
                     add_to_relevant_context(chat_id, {
                         "role": "Бот",
                         "message": spontaneous_response,
@@ -2533,7 +2550,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "reply_to": user_name,
                     "timestamp": current_time
                 })
-                save_chat_history(chat_histories)
+                save_chat_history_for_id(chat_id, chat_histories[chat_id])
                 add_to_relevant_context(chat_id, {
                     "role": "Бот",
                     "message": caption or "[Изображение без подписи]",
@@ -2650,7 +2667,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "reply_to": user_name if update.message.reply_to_message else None,
                     "timestamp": current_time
                 })
-                save_chat_history(chat_histories)
+                save_chat_history_for_id(chat_id, chat_histories[chat_id])
                 add_to_relevant_context(chat_id, {
                     "role": user_name,
                     "message": summary,
@@ -2746,8 +2763,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                     history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
 
-                save_chat_history(chat_histories)
-                save_history_func(history_dict)
+                save_chat_history_for_id(chat_id, chat_histories[chat_id])
+                save_history_func(chat_id, history_dict[chat_id])
                 add_to_relevant_context(chat_id, {
                     "role": "Бот",
                     "message": gemini_response,
@@ -2789,7 +2806,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             history_dict[chat_id].append(message)
             add_to_relevant_context(chat_id, message)
-            save_chat_history_full(history_dict)
+            save_chat_history_full_for_id(chat_id, history_dict[chat_id])
 
             if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                 history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
@@ -2802,7 +2819,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for msg in history_dict[chat_id]
             ])
 
-            save_history_func(history_dict)  # Сохраняем историю после добавления сообщения
+            save_history_func(chat_id, history_dict[chat_id])  # Сохраняем историю после добавления сообщения
 
             quote_part = ""
             if quoted_text:
@@ -2832,7 +2849,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     history_dict[chat_id].pop(0)
 
                 logger.info("История чата после добавления ответа бота: %s", history_dict[chat_id])
-                save_history_func(history_dict)
+                save_history_func(chat_id, history_dict[chat_id])
                 await waiting_message.delete()
 
             except Exception as e:
@@ -3173,7 +3190,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_name = user_names_map.get(username, username)
         logger.info("Фоновая обработка изображения от пользователя: %s", user_name)
 
-        chat_history = chat_histories.setdefault(chat_id, [])
+        chat_history = get_chat_history(chat_id)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         relevant_messages = get_relevant_context(chat_id)
 
@@ -3240,7 +3257,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "reply_to": user_name,
                     "timestamp": current_time
                 })
-                save_chat_history(chat_histories)
+                save_chat_history_for_id(chat_id, chat_histories[chat_id])
                 add_to_relevant_context(chat_id, {
                     "role": "Бот",
                     "message": full_description,
@@ -3273,7 +3290,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "reply_to": user_name,
                     "timestamp": current_time
                 })
-                save_chat_history(chat_histories)
+                save_chat_history_for_id(chat_id, chat_histories[chat_id])
                 add_to_relevant_context(chat_id, {
                     "role": "Бот",
                     "message": gemini_response,
@@ -3401,7 +3418,7 @@ async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TY
             }
             chat_histories[chat_id].append(history_entry)
             add_to_relevant_context(chat_id, history_entry)
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
 
         except Exception as e:
             logger.error(f"Ошибка при обработке стикера: {e}")
@@ -3432,7 +3449,7 @@ async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TY
                 }
                 chat_histories[chat_id].append(bot_entry)
                 add_to_relevant_context(chat_id, bot_entry)
-                save_chat_history(chat_histories)
+                save_chat_history_for_id(chat_id, chat_histories[chat_id])
                 bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
                 await waiting_message.delete()
             except Exception as e:
@@ -3526,7 +3543,7 @@ async def handle_video_sticker(update: Update, context: ContextTypes.DEFAULT_TYP
         }
         chat_history.append(history_entry)
         add_to_relevant_context(chat_id, history_entry)
-        save_chat_history(chat_histories)
+        save_chat_history_for_id(chat_id, chat_histories[chat_id])
 
         try:
             response_prompt = (
@@ -3545,7 +3562,7 @@ async def handle_video_sticker(update: Update, context: ContextTypes.DEFAULT_TYP
             }
             chat_history.append(bot_response_entry)
             add_to_relevant_context(chat_id, bot_response_entry)
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
 
             bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             await waiting_message.delete()
@@ -3625,7 +3642,7 @@ async def handle_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "reply_to": user_name if update.message.reply_to_message else None,
             "timestamp": current_time
         })
-        save_chat_history(chat_histories)
+        save_chat_history_for_id(chat_id, chat_histories[chat_id])
         add_to_relevant_context(chat_id, {
             "role": user_name,
             "message": response_text,
@@ -3654,7 +3671,7 @@ async def handle_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "reply_to": user_name,
                 "timestamp": current_time
             })
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
             add_to_relevant_context(chat_id, {
                 "role": "Бот",
                 "message": response,
@@ -3797,7 +3814,7 @@ async def summarize_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(chat_histories[chat_id]) > MAX_HISTORY_LENGTH:
                 chat_histories[chat_id].pop(0)
 
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
             logger.info("Ответ на /mental_health добавлен в историю чата.")
         except Exception as e:
             logger.exception("Ошибка при генерации анализа чата: %s", e)
@@ -3845,7 +3862,7 @@ async def mental_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(chat_histories[chat_id]) > MAX_HISTORY_LENGTH:
                 chat_histories[chat_id].pop(0)
 
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
             logger.info("Ответ на /mental_health добавлен в историю чата.")
         except Exception as e:
             logger.exception("Ошибка при анализе /mental_health: %s", e)
@@ -3887,7 +3904,7 @@ async def furry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(chat_histories[chat_id]) > MAX_HISTORY_LENGTH:
                 chat_histories[chat_id].pop(0)
 
-            save_chat_history(chat_histories)
+            save_chat_history_for_id(chat_id, chat_histories[chat_id])
         except Exception as e:
             logger.exception("Ошибка при генерации фурри-образа: %s", e)
             await update.message.reply_text("Произошла ошибка при генерации образа.")
@@ -5321,7 +5338,7 @@ async def todayall(update: Update, context: CallbackContext) -> None:
     else:
         # Замените load_chat_history() на вашу реальную функцию загрузки
         try:
-            chat_history = load_chat_history() # Замените на вашу функцию!
+            chat_history = load_chat_history_by_id(chat_id) # Замените на вашу функцию!
             messages = chat_history.get(chat_id, [])
             if not messages:
                  logger.warning(f"No message history found for chat_id: {chat_id}")
@@ -5467,7 +5484,7 @@ async def today(update: Update, context: CallbackContext) -> None:
         user_names = list(user_names_dict.values())
     else:
         # Загружаем историю чата
-        chat_history = load_chat_history()
+        chat_history = load_chat_history_by_id(chat_id)
         messages = chat_history.get(chat_id, [])
         logger.info(f"messages: {messages}") 
         # Собираем уникальные имена (исключая "Бот")
@@ -5724,7 +5741,7 @@ async def chatday(update: Update, context: CallbackContext) -> None:
             # !!! ЗАМЕНИТЕ load_chat_history() на вашу реальную функцию загрузки истории !!!
             # Предполагается, что load_chat_history определена в другом месте и возвращает dict типа {chat_id: [{"role": "...", ...}]}
             if 'load_chat_history' in globals() and callable(load_chat_history):
-                chat_history = load_chat_history()
+                chat_history = load_chat_history_by_id(chat_id)
                 messages = chat_history.get(chat_id, [])
                 if not messages:
                      logger.warning(f"No message history found for chat_id: {chat_id}. Using sender's name.")
@@ -5993,7 +6010,7 @@ async def eventall(update: Update, context: CallbackContext) -> None:
         user_names = list(user_names_dict.values())
 
     else:
-        chat_history = load_chat_history()
+        chat_history = load_chat_history_by_id(chat_id)
         messages = chat_history.get(chat_id, [])
         logger.info(f"messages: {messages}")
         user_names = {msg["role"] for msg in messages if msg["role"] != "Бот"}
@@ -6416,7 +6433,7 @@ async def astrologic(update: Update, context: CallbackContext) -> None:
         logger.info(f"Using specific user list for chat {chat_id}: {user_names}")
     else:
         try:
-            chat_history = load_chat_history() # Используем вашу функцию
+            chat_history = load_chat_history_by_id(chat_id) # Используем вашу функцию
             messages = chat_history.get(chat_id, [])
             if not messages:
                 logger.warning(f"No message history found for chat_id: {chat_id}")
@@ -7945,12 +7962,8 @@ async def handle_statall_command(update, context):
 
 
 
-
-
-
 # Обновляем основную функцию main
 def main():
-    load_chat_history() 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     application.add_handler(InlineQueryHandler(inline_query_handler))
     application.add_handler(CallbackQueryHandler(button_callback_handler))   
