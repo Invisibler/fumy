@@ -57,7 +57,7 @@ from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
 from yt_dlp.utils import sanitize_filename
 
 # Telegram Bot Token и Google API Key
-TELEGRAM_BOT_TOKEN = "8099803322:AAHGpK6VvSorVVs03QnrMtb3o4HIs0tQHlA"
+TELEGRAM_BOT_TOKEN = "7027286115:AAFTS-mK2ajoXB4wTuvS0NmiHi2R2TDBrIo"
 GOOGLE_API_KEY = "AIzaSyD2ZTY78J1VnKrMWZGi_VbkylJdJ7N4rIc" 
  
 
