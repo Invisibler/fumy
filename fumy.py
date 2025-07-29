@@ -1,85 +1,60 @@
-# --- Стандартная библиотека ---
+# Стандартная библиотека
 import asyncio
 import calendar
 import glob
-import io
 import json
 import logging
 import os
-import random
+import pathlib
 import re
 import shutil
 import subprocess
 import tempfile
 import textwrap
 import time
-import uuid
 from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from html import escape
-from pathlib import Path
+from io import BytesIO
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
-# --- Сторонние библиотеки ---
+# Сторонние библиотеки
 import aiohttp
+import firebase_admin
+import google.generativeai as genai
+from google import genai
+import io
+from google.genai import types 
 import httpx
+import matplotlib.dates as mdates
 import matplotlib.font_manager as fm
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import numpy as np
 import psutil
 import yt_dlp
-from yt_dlp.utils import sanitize_filename
-
-# --- NLP / ML ---
-from natasha import MorphVocab, Segmenter, NewsEmbedding, NewsMorphTagger, Doc
-
-# --- Firebase ---
-import firebase_admin
 from firebase_admin import credentials, db
 
-# --- Pyrogram ---
+from google.genai.types import (CreateCachedContentConfig, FunctionDeclaration,
+                                GenerateContentConfig, GoogleSearch, Part,
+                                Retrieval, SafetySetting, Tool,
+                                VertexAISearch)
+from matplotlib.dates import DayLocator
+from matplotlib.gridspec import GridSpec
+from matplotlib.ticker import MaxNLocator
+from natasha import (Doc, MorphVocab, NewsEmbedding, NewsMorphTagger,
+                     Segmenter)
+from PIL import Image
 from pyrogram import Client
-
-# --- Google Generative AI ---
-import google.generativeai as genai
-from google import genai
-from google.genai import types
-from google.genai.types import (
-    CreateCachedContentConfig,
-    FunctionDeclaration,
-    GenerateContentConfig,
-    GoogleSearch,
-    Part,
-    Retrieval,
-    SafetySetting,
-    Tool,
-    VertexAISearch,
-)
-
-# --- Telegram API ---
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InputTextMessageContent,
-    ReplyKeyboardMarkup,
-    Update,
-    WebAppInfo,
-    InlineQueryResultArticle,
-)
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
+                      InlineQueryResultArticle, InputTextMessageContent,
+                      ReplyKeyboardMarkup, Update, WebAppInfo)
 from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CallbackContext,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    InlineQueryHandler,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
+                          CommandHandler, ContextTypes, InlineQueryHandler,
+                          MessageHandler, filters)
+from yt_dlp.utils import sanitize_filename
 
 # Telegram Bot Token и Google API Key
 TELEGRAM_BOT_TOKEN = "8099803322:AAHGpK6VvSorVVs03QnrMtb3o4HIs0tQHlA"
@@ -148,11 +123,8 @@ user_names_map = {
 
 
 # Инициализация Firebase
-base_dir = os.path.dirname(os.path.abspath(__file__))
-cred_path = os.path.join(base_dir, 'config/fumy-1e1ec-firebase-adminsdk-fbsvc-d66061489d.json')
+cred = credentials.Certificate('/etc/secrets/firebase-key.json')  # Путь к вашему JSON файлу
 
-# Инициализация Firebase
-cred = credentials.Certificate(cred_path)
 firebase_admin.initialize_app(cred, {
     'databaseURL': 'https://fumy-1e1ec-default-rtdb.europe-west1.firebasedatabase.app/'  # Замените на URL вашей базы данных
 })
