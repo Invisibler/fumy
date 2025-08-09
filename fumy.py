@@ -244,11 +244,6 @@ def is_duplicate(msg, existing):
 
 
 def save_chat_history_for_id(chat_id: str, messages: list):
-    """
-    Сохраняет историю чата для заданного chat_id в Firebase Realtime Database.
-    Предварительно загружает текущие данные, чтобы избежать перезаписи
-    и сохранить только новые уникальные сообщения.
-    """
     try:
         if not firebase_admin._DEFAULT_APP_NAME:
             logger.error("Firebase приложение не инициализировано. Невозможно сохранить историю чата.")
@@ -256,17 +251,19 @@ def save_chat_history_for_id(chat_id: str, messages: list):
 
         ref = db.reference(f'chat_histories/{chat_id}')
 
-        # Загрузка актуальных данных перед сохранением
-        current_data = ref.get()
-        if current_data is None:
-            current_data = []
+        current_data = ref.get() or []
 
-        # Добавление только новых сообщений, избегая дублирования
         new_messages = [msg for msg in messages if not is_duplicate(msg, current_data)]
         if new_messages:
             updated_data = current_data + new_messages
+
+            # Обрезка старых сообщений, если превышен лимит
+            if len(updated_data) > MAX_HISTORY_LENGTH:
+                updated_data = updated_data[-MAX_HISTORY_LENGTH:]
+
             ref.set(updated_data)
-            logger.info(f"История чата для chat_id {chat_id} успешно обновлена ({len(new_messages)} новых сообщений).")
+            logger.info(f"История чата для chat_id {chat_id} успешно обновлена "
+                        f"({len(new_messages)} новых сообщений, всего {len(updated_data)}).")
         else:
             logger.info(f"Нет новых сообщений для сохранения в истории чата chat_id {chat_id}.")
 
@@ -277,26 +274,25 @@ def save_chat_history_for_id(chat_id: str, messages: list):
 
         
 def save_game_history_for_id(chat_id: str, messages: list):
-    """
-    Сохраняет историю игры для заданного chat_id в Firebase Realtime Database.
-    Предварительно загружает текущие данные, чтобы избежать перезаписи
-    и сохранить только новые уникальные сообщения.
-    """
     try:
         if not firebase_admin._DEFAULT_APP_NAME:
             logger.error("Firebase приложение не инициализировано. Невозможно сохранить историю игры.")
             return
 
         ref = db.reference(f'games_histories/{chat_id}')
-        current_data = ref.get()
-        if current_data is None:
-            current_data = []
+        current_data = ref.get() or []
 
         new_messages = [msg for msg in messages if not is_duplicate(msg, current_data)]
         if new_messages:
             updated_data = current_data + new_messages
+
+            # Обрезка старых сообщений
+            if len(updated_data) > MAX_HISTORY_LENGTH:
+                updated_data = updated_data[-MAX_HISTORY_LENGTH:]
+
             ref.set(updated_data)
-            logger.info(f"История игры для chat_id {chat_id} успешно обновлена ({len(new_messages)} новых сообщений).")
+            logger.info(f"История игры для chat_id {chat_id} успешно обновлена "
+                        f"({len(new_messages)} новых сообщений, всего {len(updated_data)}).")
         else:
             logger.info(f"Нет новых сообщений для сохранения в истории игры chat_id {chat_id}.")
 
@@ -8078,3 +8074,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
