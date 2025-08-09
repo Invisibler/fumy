@@ -152,7 +152,6 @@ def split_message(text, max_length=MAXTG_MESSAGE_LENGTH):
 
 
 ALLOWED_USER_ID = 6217936347
-
 async def fumy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Рассылает сообщение, на которое был сделан reply, списку user_id, заданному через запятую.
@@ -172,11 +171,24 @@ async def fumy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Укажите список ID через запятую: /fsend 12345,67890")
         return
 
-    try:
-        user_ids = [int(uid.strip()) for uid in context.args[0].split(',') if uid.strip()]
-    except ValueError:
-        await update.message.reply_text("Некорректный формат ID. Пример: /fsend 12345,67890")
-        return
+    # Объединяем все аргументы в одну строку, чтобы обработать ID, разделенные пробелами
+    id_string = " ".join(context.args)
+    # Разбиваем строку по запятым
+    raw_ids = id_string.split(',')
+
+    user_ids = []
+    for uid_str in raw_ids:
+        # Убираем лишние пробелы с краев
+        cleaned_uid = uid_str.strip()
+        if not cleaned_uid:
+            continue  # Пропускаем пустые значения (например, от двойной запятой ,,)
+        try:
+            # Пытаемся преобразовать строку в целое число
+            user_ids.append(int(cleaned_uid))
+        except ValueError:
+            # Если не получилось, значит это невалидный ID
+            await update.message.reply_text(f"Некорректный формат ID: '{cleaned_uid}'. ID должен быть целым числом.")
+            return
 
     if not user_ids:
         await update.message.reply_text("Список ID пуст или некорректен.")
@@ -200,7 +212,6 @@ async def fumy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Готово! Отправлено: {success}. Ошибок: {failed}."
     )
-
 
 relevant_context = {}  # Локальный облегчённый контекст (последние 5 сообщений)
 
@@ -7988,6 +7999,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
