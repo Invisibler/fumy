@@ -1943,7 +1943,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await file.download_to_drive(image_file_path)
 
-                instructions = match.group(2).strip() or "Добавь что-то интересное!"
+                instructions = match_fulldraw.group(2).strip() or "Добавь что-то интересное!"
                 logger.info("Запрос на дорисовку: %s", instructions)
                 instructions_full = await translate_promt_with_gemini(instructions)
                 logger.info("transl: %s", instructions_full)
@@ -1966,7 +1966,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("Не удалось обработать изображение.")
             except Exception as e:
                 logger.error(f"Ошибка при обработке изображения: {e}")
-                await update.message.reply_text("⚠️ Ошибка при обработке изображения.")
+                await update.message.reply_text("Обработка изображения заняла дольше обычного...")
             finally:
                 if os.path.exists(image_file_path):
                     try:
@@ -1979,8 +1979,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
-
+        return
 
 
     if update.message.reply_to_message and re.match(r"^фуми[\s,:\-!?.]*", user_message.lower()):
@@ -2064,7 +2063,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.setdefault('user_tasks', set()).add(task)
             task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
 
-
+            return
 
 
         else:
@@ -2142,6 +2141,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_tasks_set = context.user_data.setdefault('user_tasks', set())
                 user_tasks_set.add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
+                return             
             elif original_message.photo:
                 waiting_message = await update.message.reply_text("Распознаю изображение...")
 
@@ -2228,7 +2228,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_tasks_set = context.user_data.setdefault('user_tasks', set())
                 user_tasks_set.add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
+                return
             elif original_message.video:
                 waiting_message = await update.message.reply_text("Обрабатываю видео...")
 
@@ -7999,6 +7999,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
