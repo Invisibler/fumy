@@ -173,8 +173,8 @@ async def fumy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        user_ids = [int(uid.strip()) for uid in context.args[0].split(',') if uid.strip().isdigit()]
-    except Exception:
+        user_ids = [int(uid.strip()) for uid in context.args[0].split(',') if uid.strip()]
+    except ValueError:
         await update.message.reply_text("Некорректный формат ID. Пример: /fsend 12345,67890")
         return
 
@@ -200,7 +200,6 @@ async def fumy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Готово! Отправлено: {success}. Ошибок: {failed}."
     )
-
 
 
 relevant_context = {}  # Локальный облегчённый контекст (последние 5 сообщений)
@@ -7989,6 +7988,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
