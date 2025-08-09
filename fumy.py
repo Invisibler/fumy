@@ -55,6 +55,8 @@ from telegram.ext import (Application, CallbackContext, CallbackQueryHandler,
                           CommandHandler, ContextTypes, InlineQueryHandler,
                           MessageHandler, filters)
 from yt_dlp.utils import sanitize_filename
+import random
+
 
 # Telegram Bot Token и Google API Key
 TELEGRAM_BOT_TOKEN = "7027286115:AAFTS-mK2ajoXB4wTuvS0NmiHi2R2TDBrIo"
@@ -2973,7 +2975,7 @@ async def fhelp(update: Update, context: CallbackContext):
 Вы можете ответить на любое сообщение в чате (даже на медиа) и начать свой ответ с "фуми", чтобы бот его обработал. Например, ответьте на GIF-анимацию и задайте вопрос о ней.
 
 <i>Обратите внимание:</i>
-- Медиаконтент (GIF, видео, стикеры, аудио), отправленный без упоминания "фуми" или ответа боту, не будет учтён в беседе, бот не будет о нём знать.
+- Медиаконтент (GIF, видео, стикеры, аудио), отправленный без упоминания "фуми" или ответа боту, не будет учтён в беседе и сохранён в контекст, бот не будет о нём знать.
 - При этом все чисто текстовые сообщения учитываются.
 
 <b>Генерация изображений:</b>
@@ -3836,9 +3838,12 @@ async def summarize_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_name = update.message.from_user.username or update.message.from_user.first_name
 
+    # Загружаем историю из Firebase
+    history = load_chat_history_by_id(chat_id)
+
     chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
-        for msg in chat_histories.get(chat_id, [])
+        f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
+        for msg in history
     ])
 
     query = "Выдай, пожалуйста, краткую сводку чата за последние сутки."
@@ -3851,21 +3856,21 @@ async def summarize_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             escaped_response = escape(response)
             html_response = f"<blockquote expandable>{escaped_response}</blockquote>"
 
-            sent_message = await update.message.reply_text(html_response[:4096], parse_mode=ParseMode.HTML)
+            sent_message = await update.message.reply_text(
+                html_response[:4096], parse_mode=ParseMode.HTML
+            )
 
             bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
 
-            chat_histories.setdefault(chat_id, []).append({
+            # Обновляем историю
+            history.append({
                 "role": "Бот",
                 "message": response,
                 "reply_to": user_name,
                 "timestamp": update.message.date.strftime("%Y-%m-%d %H:%M:%S")
             })
 
-            if len(chat_histories[chat_id]) > MAX_HISTORY_LENGTH:
-                chat_histories[chat_id].pop(0)
-
-            save_chat_history_for_id(chat_id, chat_histories[chat_id])
+            save_chat_history_for_id(chat_id, history)
             logger.info("Ответ на /mental_health добавлен в историю чата.")
         except Exception as e:
             logger.exception("Ошибка при генерации анализа чата: %s", e)
@@ -3881,9 +3886,10 @@ async def mental_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_name = update.message.from_user.username or update.message.from_user.first_name
 
+    history = load_chat_history_by_id(chat_id)
     chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
-        for msg in chat_histories.get(chat_id, [])
+        f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
+        for msg in history
     ])
 
     query = (
@@ -3910,9 +3916,6 @@ async def mental_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "timestamp": update.message.date.strftime("%Y-%m-%d %H:%M:%S")
             })
 
-            if len(chat_histories[chat_id]) > MAX_HISTORY_LENGTH:
-                chat_histories[chat_id].pop(0)
-
             save_chat_history_for_id(chat_id, chat_histories[chat_id])
             logger.info("Ответ на /mental_health добавлен в историю чата.")
         except Exception as e:
@@ -3922,16 +3925,17 @@ async def mental_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(background_analysis())
 
 
-
-
 async def furry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_id = update.message.from_user.username or update.message.from_user.first_name
     real_name = user_names_map.get(user_id, user_id)
 
+    # Загружаем историю из Firebase
+    history = load_chat_history_by_id(chat_id)
+
     chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
-        for msg in chat_histories.get(chat_id, [])
+        f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
+        for msg in history
     ])
 
     query = f"{real_name} хочет узнать, какой образ фурри ему бы подошёл. Опиши образ, учитывая контекст диалога."
@@ -4013,17 +4017,17 @@ async def simulate_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Если пользователь не найден, используем переданное имя
         real_name = None
 
-    # Извлечение истории чата
-    if chat_id not in chat_histories:
+    # Извлечение истории чата из Firebase
+    full_chat_history = load_chat_history_by_id(chat_id)
+
+    if not full_chat_history:
         await update.message.reply_text("История чата пуста.")
         return
 
-    full_chat_history = chat_histories[chat_id]
     chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
+        f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
         for msg in full_chat_history
     ])
-
     # Формирование промпта на основе наличия известного пользователя
     if real_name:
         context_for_simulation = (
@@ -4056,63 +4060,43 @@ async def simulate_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Логирование подготовленного контекста
     logger.info("Подготовленный контекст для Gemini: %s", context_for_simulation)
 
-    # Запрос в Gemini для генерации ответа
-    try:
-        # Создаём клиент с правильным ключом
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=context_for_simulation,  # Здесь передаётся переменная context
-            config=types.GenerateContentConfig(
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                max_output_tokens=10000,
-                #presence_penalty=0.7,
-                #frequency_penalty=0.7,
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]
+    waiting_message = await update.message.reply_text("Генерирую сообщение...")
+
+    async def background_simulation():
+        try:
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=context_for_simulation,
+                config=types.GenerateContentConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    max_output_tokens=10000,
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]
+                )
             )
-        )     
-        logger.info("Ответ от Gemini: %s", response)   
-        if response.candidates and response.candidates[0].content.parts:
-            simulated_message = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
             logger.info("Ответ от Gemini: %s", response)
-            sent_message = await update.message.reply_text(simulated_message[:4096])
-            # Сохраняем message_id в bot_message_ids для последующего удаления
-            if chat_id not in bot_message_ids:
-                bot_message_ids[chat_id] = []
-            bot_message_ids[chat_id].append(sent_message.message_id)            
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            # Проверяем, есть ли какие-либо дополнительные данные в response
-            if hasattr(response, '__dict__'):
-                logger.info("Содержимое response: %s", response.__dict__)
+
+            if response.candidates and response.candidates[0].content.parts:
+                simulated_message = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+
+                sent_message = await update.message.reply_text(simulated_message[:4096])
+                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             else:
-                logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-            
-            return "Извините, я не могу ответить на этот запрос."
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        return "Ошибка при обработке запроса. Попробуйте снова."
+                await update.message.reply_text("Извините, я не могу сгенерировать сообщение.")
+        except Exception as e:
+            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
+            await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
+
+    asyncio.create_task(background_simulation())
 
 
 
@@ -4148,54 +4132,52 @@ async def dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     # Запрос к модели Gemini (замените на ваш запрос)
-    try:
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=1.5,
-                top_p=0.95,
-                top_k=25,
-                #max_output_tokens=1000,
-                #presence_penalty=0.6,
-                #frequency_penalty=0.7,
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]                
-            )
-        )
-        logger.info("response: %s", response)        
-        if response.candidates and response.candidates[0].content.parts:
-            generated_story = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Ответ от Gemini: %s", generated_story)
-            await update.message.reply_text(
-                f"🎲 Бросок кубика: {roll}\n\n{generated_story[:4096]}"
-            )
-        else:
-            logger.warning("Gemini не вернул ответ.")
-            await update.message.reply_text(f"🎲 Бросок кубика: {roll}\n\nК сожалению, результат не удалось обработать.")
-    except Exception as e:
-        logger.error("Ошибка при обращении к Gemini: %s", e)
-        await update.message.reply_text(f"🎲 Бросок кубика: {roll}\n\nОшибка обработки результата.")
+    waiting_message = await update.message.reply_text("🎲 Кидаем кубик, обрабатываю результат...")
 
+    async def background_dice():
+        try:
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=1.5,
+                    top_p=0.95,
+                    top_k=25,
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]                
+                )
+            )
+
+            if response.candidates and response.candidates[0].content.parts:
+                generated_story = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+                await context.bot.edit_message_text(
+                    chat_id=update.message.chat_id,
+                    message_id=waiting_message.message_id,
+                    text=f"🎲 Бросок кубика: {roll}\n\n{generated_story[:4096]}"
+                )
+            else:
+                await context.bot.edit_message_text(
+                    chat_id=update.message.chat_id,
+                    message_id=waiting_message.message_id,
+                    text=f"🎲 Бросок кубика: {roll}\n\nК сожалению, результат не удалось обработать."
+                )
+
+        except Exception as e:
+            logger.error("Ошибка при обращении к Gemini: %s", e)
+            await context.bot.edit_message_text(
+                chat_id=update.message.chat_id,
+                message_id=waiting_message.message_id,
+                text=f"🎲 Бросок кубика: {roll}\n\nОшибка обработки результата."
+            )
+
+    asyncio.create_task(background_dice())
 
 
 
@@ -4207,14 +4189,16 @@ async def rpg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     real_name = user_names_map.get(user_id, None) or username
 
 
-    # Извлечь историю чата
-    if chat_id not in chat_histories or not chat_histories[chat_id]:
+    # Извлечение истории чата из Firebase
+    full_chat_history = load_chat_history_by_id(chat_id)
+
+    if not full_chat_history:
         await update.message.reply_text("История чата пуста.")
         return
 
     chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
-        for msg in chat_histories[chat_id]
+        f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
+        for msg in full_chat_history
     ])
 
     # Сформировать промпт
@@ -4242,77 +4226,53 @@ async def rpg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Промпт для Gemini: %s", prompt)
 
     # Запрос в модель
-    try:
-        # Создаём клиент с правильным ключом
-        google_search_tool = Tool(
-            google_search=GoogleSearch()
-        )        
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,  # Здесь передаётся переменная context
-            config=types.GenerateContentConfig(
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                #max_output_tokens=1000,
-                tools=[google_search_tool],                
-                #presence_penalty=0.7,
-                #frequency_penalty=0.7,
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]
+    waiting_message = await update.message.reply_text("Генерирую твои характеристики...")
+
+    async def background_rpg():
+        try:
+            google_search_tool = Tool(
+                google_search=GoogleSearch()
             )
-        )     
-        if response.candidates and response.candidates[0].content.parts:
-            generated_answer = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Ответ от Gemini: %s", generated_answer)
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]
+                )
+            )
 
-            # Экранируем спецсимволы для корректного отображения в HTML
-            escaped_answer = escape(generated_answer)
+            if response.candidates and response.candidates[0].content.parts:
+                generated_answer = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
 
-            # Обрезаем текст с учётом длины тега <blockquote> (36 символов)
-            truncated_answer = escaped_answer[:4060]
+                logger.info("Ответ от Gemini: %s", generated_answer)
 
-            # Оборачиваем в <blockquote> для форматирования
-            html_answer = f"<blockquote expandable>{truncated_answer}</blockquote>"
+                escaped_answer = escape(generated_answer)
+                truncated_answer = escaped_answer[:4060]
+                html_answer = f"<blockquote expandable>{truncated_answer}</blockquote>"
 
-            # Отправляем HTML-сообщение
-            sent_message = await update.message.reply_text(html_answer, parse_mode=ParseMode.HTML)
+                sent_message = await update.message.reply_text(html_answer, parse_mode=ParseMode.HTML)
 
-            # Сохраняем message_id в bot_message_ids для последующего удаления
-            if chat_id not in bot_message_ids:
-                bot_message_ids[chat_id] = []
-            bot_message_ids[chat_id].append(sent_message.message_id)               
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            # Проверяем, есть ли какие-либо дополнительные данные в response
-            if hasattr(response, '__dict__'):
-                logger.info("Содержимое response: %s", response.__dict__)
+                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             else:
-                logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-            
-            return "Извините, я не могу ответить на этот запрос."
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        return "Ошибка при обработке запроса. Попробуйте снова."
+                logger.warning("Gemini не вернул ответ на запрос.")
+                await update.message.reply_text("Извините, я не смог придумать характеристики.")
+        except Exception as e:
+            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
+            await update.message.reply_text("Ошибка при обработке запроса. Попробуй снова.")
+
+    asyncio.create_task(background_rpg())
 
 
 
@@ -4339,6 +4299,7 @@ def generate_random_date():
     return datetime(year, month, day)
 
 # Основная команда
+# Основная команда
 async def time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_message = " ".join(context.args)  # Объединить аргументы команды
@@ -4350,14 +4311,16 @@ async def time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, укажите вопрос после команды /time.")
         return
 
-    # Извлечь историю чата
-    if chat_id not in chat_histories or not chat_histories[chat_id]:
+    # Извлечение истории чата из Firebase
+    full_chat_history = load_chat_history_by_id(chat_id)
+
+    if not full_chat_history:
         await update.message.reply_text("История чата пуста.")
         return
 
     chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
-        for msg in chat_histories[chat_id]
+        f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
+        for msg in full_chat_history
     ])
 
     # Сгенерировать случайную дату
@@ -4376,66 +4339,55 @@ async def time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info("Промпт для Gemini: %s", prompt)
 
-    # Запрос в модель
-    try:
-        # Создаём клиент с правильным ключом
-        google_search_tool = Tool(
-            google_search=GoogleSearch()
-        )        
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,  # Здесь передаётся переменная context
-            config=types.GenerateContentConfig(
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                #max_output_tokens=1000,
-                tools=[google_search_tool],                
-                #presence_penalty=0.7,
-                #frequency_penalty=0.7,
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]
+    # Сообщение ожидания
+    waiting_message = await update.message.reply_text("⏳ Думаю...")
+
+    async def background_time():
+        try:
+            google_search_tool = Tool(
+                google_search=GoogleSearch()
             )
-        )     
-        if response.candidates and response.candidates[0].content.parts:
-            generated_answer = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Ответ от Gemini: %s", generated_answer)
-            sent_message = await update.message.reply_text(generated_answer[:4096])
-            # Сохраняем message_id в bot_message_ids для последующего удаления
-            if chat_id not in bot_message_ids:
-                bot_message_ids[chat_id] = []
-            bot_message_ids[chat_id].append(sent_message.message_id)            
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            # Проверяем, есть ли какие-либо дополнительные данные в response
-            if hasattr(response, '__dict__'):
-                logger.info("Содержимое response: %s", response.__dict__)
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]
+                )
+            )
+
+            if response.candidates and response.candidates[0].content.parts:
+                generated_answer = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+
+                sent_message = await update.message.reply_text(generated_answer[:4096])
+                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             else:
-                logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-            
-            return "Извините, я не могу ответить на этот запрос."
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        return "Ошибка при обработке запроса. Попробуйте снова."
+                logger.warning("Gemini не вернул ответ на запрос.")
+                await update.message.reply_text("Извините, я не могу ответить на этот запрос.")
+
+        except Exception as e:
+            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
+            await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
+        finally:
+            # Удаляем сообщение ожидания
+            try:
+                await waiting_message.delete()
+            except Exception as e:
+                logger.warning(f"Не удалось удалить сообщение ожидания: {e}")
+
+    asyncio.create_task(background_time())
+
 
 
 
@@ -4443,90 +4395,63 @@ async def time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
-    user_message = " ".join(context.args)  # Объединить аргументы команды
+    user_message = " ".join(context.args)
 
     if not user_message:
         await update.message.reply_text("Пожалуйста, укажите вопрос после команды /search.")
         return
 
-    # Извлечь историю чата
-    if chat_id not in chat_histories or not chat_histories[chat_id]:
-        await update.message.reply_text("История чата пуста.")
-        return
-
-    chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
-        for msg in chat_histories[chat_id]
-    ])
-
-    # Сформировать промпт
-    prompt = (
-        f"Текущий запрос: {user_message}\n\n"
-    )
-
+    prompt = f"Текущий запрос: {user_message}\n\n"
     logger.info("Промпт для Gemini: %s", prompt)
 
-    # Запрос в модель
-    try:
-        # Создаём клиент с правильным ключом
-        google_search_tool = Tool(
-            google_search=GoogleSearch()
-        )        
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,  # Здесь передаётся переменная context
-            config=types.GenerateContentConfig(
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                #max_output_tokens=1000,
-                tools=[google_search_tool],                
-                #presence_penalty=0.7,
-                #frequency_penalty=0.7,
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]
+    waiting_message = await update.message.reply_text("🔍 Ищу информацию...")
+
+    async def background_search():
+        try:
+            google_search_tool = Tool(
+                google_search=GoogleSearch()
             )
-        )    
-        logger.info(f"response: {response}")         
-        if response.candidates and response.candidates[0].content.parts:
-            generated_answer = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Ответ от Gemini: %s", generated_answer)
-            sent_message = await update.message.reply_text(generated_answer[:4096])
-            # Сохраняем message_id в bot_message_ids для последующего удаления
-            if chat_id not in bot_message_ids:
-                bot_message_ids[chat_id] = []
-            bot_message_ids[chat_id].append(sent_message.message_id)            
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            # Проверяем, есть ли какие-либо дополнительные данные в response
-            if hasattr(response, '__dict__'):
-                logger.info("Содержимое response: %s", response.__dict__)
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+                    ]
+                )
+            )
+
+            logger.info(f"response: {response}")
+
+            if response.candidates and response.candidates[0].content.parts:
+                generated_answer = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+
+                escaped_answer = escape(generated_answer)  # твоя функция экранирования HTML
+                html_response = f"<blockquote expandable>{escaped_answer}</blockquote>"
+
+                sent_message = await update.message.reply_text(
+                    html_response[:4096], parse_mode=ParseMode.HTML
+                )
+
+                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             else:
-                logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-            
-            return "Извините, я не могу ответить на этот запрос."
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        return "Ошибка при обработке запроса. Попробуйте снова."
+                logger.warning("Gemini не вернул ответ.")
+                await update.message.reply_text("Извините, я не могу ответить на этот запрос.")
+        except Exception as e:
+            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
+            await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
+
+    asyncio.create_task(background_search())
 
 
 
@@ -4602,14 +4527,16 @@ async def question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, укажите вопрос после команды /q.")
         return
 
-    # Извлечь историю чата
-    if chat_id not in chat_histories or not chat_histories[chat_id]:
+    # Извлечение истории чата из Firebase
+    full_chat_history = load_chat_history_by_id(chat_id)
+
+    if not full_chat_history:
         await update.message.reply_text("История чата пуста.")
         return
 
     chat_context = "\n".join([
-        f"{msg['role']} ответил {msg['reply_to'] if msg['reply_to'] else 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
-        for msg in chat_histories[chat_id]
+        f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
+        for msg in full_chat_history
     ])
 
     # Сформировать промпт
@@ -4623,67 +4550,55 @@ async def question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info("Промпт для Gemini: %s", prompt)
 
-    # Запрос в модель
-    try:
-        # Создаём клиент с правильным ключом
-        google_search_tool = Tool(
-            google_search=GoogleSearch()
-        )        
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,  # Здесь передаётся переменная context
-            config=types.GenerateContentConfig(
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                max_output_tokens=1000,
-                tools=[google_search_tool],                
-                #presence_penalty=0.7,
-                #frequency_penalty=0.7,
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]
-            )
-        )     
-        if response.candidates and response.candidates[0].content.parts:
-            generated_answer = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Ответ от Gemini: %s", generated_answer)
-            sent_message = await update.message.reply_text(generated_answer[:4096])
-            # Сохраняем message_id в bot_message_ids для последующего удаления
-            if chat_id not in bot_message_ids:
-                bot_message_ids[chat_id] = []
-            bot_message_ids[chat_id].append(sent_message.message_id)            
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            # Проверяем, есть ли какие-либо дополнительные данные в response
-            if hasattr(response, '__dict__'):
-                logger.info("Содержимое response: %s", response.__dict__)
-            else:
-                logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-            
-            return "Извините, я не могу ответить на этот запрос."
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        return "Ошибка при обработке запроса. Попробуйте снова."
+    # Отправляем сообщение ожидания
+    waiting_message = await update.message.reply_text("⏳ Думаю...")
 
+    async def background_question():
+        try:
+            google_search_tool = Tool(
+                google_search=GoogleSearch()
+            )
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    max_output_tokens=1000,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]
+                )
+            )
+
+            if response.candidates and response.candidates[0].content.parts:
+                generated_answer = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+
+                sent_message = await update.message.reply_text(generated_answer[:4096])
+
+                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+            else:
+                logger.warning("Gemini не вернул ответ на запрос.")
+                await update.message.reply_text("Извините, я не могу ответить на этот запрос.")
+        except Exception as e:
+            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
+            await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
+        finally:
+            # Удаляем сообщение ожидания
+            try:
+                await waiting_message.delete()
+            except Exception as e:
+                logger.warning(f"Не удалось удалить сообщение ожидания: {e}")
+
+    asyncio.create_task(background_question())
 
 # Настройки Pyrogram
 API_ID = "27037070"
@@ -8074,5 +7989,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
