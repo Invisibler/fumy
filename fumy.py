@@ -97,7 +97,7 @@ CHAT_HISTORY_FILE = "chat_history.json"
 # Список для хранения истории сообщений чата
 chat_histories = {}
 games_histories = {}
-MAX_HISTORY_LENGTH = 300
+MAX_HISTORY_LENGTH = 550
 
 user_names_map = {
     "Sylar113": "Артём",
@@ -8074,4 +8074,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
