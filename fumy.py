@@ -313,32 +313,35 @@ def save_game_history_for_id(chat_id: str, messages: list):
     except Exception as e:
         logger.error(f"Неожиданная ошибка при сохранении истории игры в Firebase: {e}")
 
+MAX_CHAT_HISTORY_FULL = 10000  # лимит сообщений для полной истории чата
+
 def save_chat_history_full_for_id(chat_id: str, messages: list):
     """
-    Сохраняет полную историю чата для заданного chat_id в Firebase Realtime Database.
-    Сохраняет только уникальные сообщения. Ограничивает сохранение только для разрешённых чатов.
+    Сохраняет полную историю чата для любого chat_id в Firebase Realtime Database.
+    Сохраняет только уникальные сообщения. Ограничивает длину истории до MAX_CHAT_HISTORY_FULL.
     """
-    allowed_chats = {"-1001475512721", "6217936347", "-1002158426902", "-1002695243416", "-1002535731403"}
-
-    if chat_id not in allowed_chats:
-        logger.info(f"[SKIP] Чат {chat_id} не входит в список разрешённых.")
-        return
-
     try:
         if not firebase_admin._DEFAULT_APP_NAME:
             logger.error("Firebase приложение не инициализировано. Невозможно сохранить полную историю чата.")
             return
 
         ref = db.reference(f'chat_histories_full/{chat_id}')
-        current_data = ref.get()
-        if current_data is None:
-            current_data = []
+        current_data = ref.get() or []
 
+        # Добавляем только уникальные сообщения
         new_messages = [msg for msg in messages if not is_duplicate(msg, current_data)]
         if new_messages:
             updated_data = current_data + new_messages
+
+            # Обрезка до последних MAX_CHAT_HISTORY_FULL сообщений
+            if len(updated_data) > MAX_CHAT_HISTORY_FULL:
+                updated_data = updated_data[-MAX_CHAT_HISTORY_FULL:]
+
             ref.set(updated_data)
-            logger.info(f"Полная история чата для chat_id {chat_id} успешно обновлена ({len(new_messages)} новых сообщений).")
+            logger.info(
+                f"Полная история чата для chat_id {chat_id} успешно обновлена "
+                f"({len(new_messages)} новых сообщений, всего {len(updated_data)})."
+            )
         else:
             logger.info(f"Нет новых сообщений для сохранения в полной истории чата chat_id {chat_id}.")
 
@@ -2503,7 +2506,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_history_func(chat_id, history_dict[chat_id])  # Сохраняем историю
 
         # Редкая вероятность спонтанного ответа
-        if random.random() < 0.001:
+        if random.random() < 0.0005:
             waiting_message = await update.message.reply_text("Обдумываю внезапную реплику...")
 
             async def background_spontaneous_response():
@@ -2997,7 +3000,7 @@ async def fhelp(update: Update, context: CallbackContext):
 
 Это правило распространяется на текст, изображения, GIF, видео, аудио и другие медиафайлы.
 
-Вы можете ответить на любое сообщение в чате (даже на медиа) и начать свой ответ с "фуми", чтобы бот его обработал. Например, ответьте на GIF-анимацию и задайте вопрос о ней.
+То есть можете ответить на любое сообщение в чате (в тч на медиа) и начать свой ответ с "фуми", чтобы бот его обработал. Например, ответьте на GIF-анимацию и задайте вопрос о ней.
 
 <i>Обратите внимание:</i>
 - Медиаконтент (GIF, видео, стикеры, аудио), отправленный без упоминания "фуми" или ответа боту, не будет учтён в беседе и сохранён в контекст, бот не будет о нём знать.
@@ -3005,7 +3008,7 @@ async def fhelp(update: Update, context: CallbackContext):
 
 <b>Генерация изображений:</b>
 - Начните сообщение с "<i>Фуми, нарисуй...</i>", чтобы создать изображение по вашему текстовому запросу.
-- Ответьте на любое сообщение или изображение и напишите "<i>фуми, нарисуй</i>", чтобы сгенерировать новую картинку на его основе.
+- Ответьте на любое сообщение или его часть через цитату и напишите "<i>фуми, нарисуй</i>", чтобы сгенерировать новую картинку на основе данного текста.
 - Ответьте на изображение и напишите "<i>Фуми, дорисуй...</i>", чтобы бот отредактировал исходную картинку согласно вашему запросу.
 </blockquote>
 
@@ -3028,8 +3031,8 @@ async def fhelp(update: Update, context: CallbackContext):
 
 <b>Команды с текстом после них:</b>
 <code>/sim</code> — симулировать участника чата или персонажа
-<code>/q</code> — задать вопрос, игнорируя контекст
-<code>/search</code> — задать вопрос, игнорируя контекст и историю
+<code>/q</code> — задать вопрос, игнорируя роль
+<code>/search</code> — задать вопрос, игнорируя роль и историю
 <code>/time</code> — узнать, когда произошло/произойдёт событие
 <code>/image</code> — сгенерировать изображение
 <code>/iq</code> — распределение IQ по шкале разумизма
@@ -5329,8 +5332,8 @@ async def todayall(update: Update, context: CallbackContext) -> None:
     else:
         # Замените load_chat_history() на вашу реальную функцию загрузки
         try:
-            chat_history = load_chat_history_by_id(chat_id) # Замените на вашу функцию!
-            messages = chat_history.get(chat_id, [])
+            chat_history = load_chat_history_by_id(chat_id)
+            messages = chat_history if isinstance(chat_history, list) else []
             if not messages:
                  logger.warning(f"No message history found for chat_id: {chat_id}")
                  # Пытаемся получить хотя бы отправителя команды
@@ -5476,7 +5479,7 @@ async def today(update: Update, context: CallbackContext) -> None:
     else:
         # Загружаем историю чата
         chat_history = load_chat_history_by_id(chat_id)
-        messages = chat_history.get(chat_id, [])
+        messages = chat_history if isinstance(chat_history, list) else []
         logger.info(f"messages: {messages}") 
         # Собираем уникальные имена (исключая "Бот")
         user_names = {msg["role"] for msg in messages if msg["role"] != "Бот"}
@@ -5733,7 +5736,7 @@ async def chatday(update: Update, context: CallbackContext) -> None:
             # Предполагается, что load_chat_history определена в другом месте и возвращает dict типа {chat_id: [{"role": "...", ...}]}
             if 'load_chat_history' in globals() and callable(load_chat_history):
                 chat_history = load_chat_history_by_id(chat_id)
-                messages = chat_history.get(chat_id, [])
+                messages = chat_history if isinstance(chat_history, list) else []
                 if not messages:
                      logger.warning(f"No message history found for chat_id: {chat_id}. Using sender's name.")
                      # Пытаемся получить хотя бы отправителя команды
@@ -6002,7 +6005,7 @@ async def eventall(update: Update, context: CallbackContext) -> None:
 
     else:
         chat_history = load_chat_history_by_id(chat_id)
-        messages = chat_history.get(chat_id, [])
+        messages = chat_history if isinstance(chat_history, list) else []
         logger.info(f"messages: {messages}")
         user_names = {msg["role"] for msg in messages if msg["role"] != "Бот"}
         logger.info(f"user_names: {user_names}")
@@ -6425,7 +6428,7 @@ async def astrologic(update: Update, context: CallbackContext) -> None:
     else:
         try:
             chat_history = load_chat_history_by_id(chat_id) # Используем вашу функцию
-            messages = chat_history.get(chat_id, [])
+            messages = chat_history if isinstance(chat_history, list) else []
             if not messages:
                 logger.warning(f"No message history found for chat_id: {chat_id}")
                 sender = update.message.from_user
@@ -6748,26 +6751,21 @@ async def astrologic(update: Update, context: CallbackContext) -> None:
 HISTORY_FILENAME = 'chat_history_full.json'
 
 # Обновленная функция загрузки истории
-def load_chat_history_for_stat(filename=HISTORY_FILENAME):
-    """Загружает историю чата из JSON файла (ожидается словарь)."""
+def load_chat_history_for_stat():
+    """
+    Загружает историю чатов из Firebase.
+    Ожидается словарь {chat_id_str: [messages]}.
+    """
     try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            # Теперь ожидаем словарь {chat_id_str: [messages]}
-            if isinstance(data, dict):
-                return data
-            else:
-                # Если это не словарь, значит формат не тот, который ожидаем
-                print(f"Ошибка: Ожидался словарь в {filename}, получен {type(data)}")
-                return {} # Возвращаем пустой словарь в случае неверного формата
-    except FileNotFoundError:
-        print(f"Ошибка: Файл истории {filename} не найден.")
-        return {}
-    except json.JSONDecodeError:
-        print(f"Ошибка: Не удалось декодировать JSON из файла {filename}.")
-        return {}
+        ref = db.reference('chat_histories_full')
+        data = ref.get()
+        if isinstance(data, dict):
+            return data
+        else:
+            print(f"Ошибка: Ожидался словарь в chat_histories_full, получен {type(data)}")
+            return {}
     except Exception as e:
-        print(f"Непредвиденная ошибка при загрузке истории: {e}")
+        print(f"Ошибка при загрузке истории чатов из Firebase: {e}")
         return {}
 
 HISTORY_LIMIT = 20000 # Последние N сообщений для анализа
@@ -8014,6 +8012,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
