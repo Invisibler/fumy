@@ -2563,7 +2563,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_tasks_set = context.user_data.setdefault('user_tasks', set())
             user_tasks_set.add(task)
             task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-            chat_histories.pop(chat_id, None)
         return
 
     if re.match(r"(?i)^фуми[,.!?;:-]?\s+(нарисуй|сгенерируй|создай)", message_text):
@@ -2851,7 +2850,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "reply_to": real_name,
                     "timestamp": current_time
                 })
-                chat_histories.pop(chat_id, None)
+
                 await waiting_message.delete()
 
             except Exception as e:
@@ -2941,8 +2940,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-        chat_histories.pop(chat_id, None)
-
 
 
 async def image_command(update: Update, context: CallbackContext) -> None:
@@ -3004,8 +3001,8 @@ async def fhelp(update: Update, context: CallbackContext):
     # Заранее заготовленный текст
     help_text = """
 <blockquote expandable><b>Бот реагирует только в двух случаях:</b>
-- Если вы отвечаете на его сообщение
-- Если ваше сообщение начинается с "фуми"
+- Если вы отвечаете на его сообщение.
+- Если ваше сообщение начинается с "фуми".
 
 Это правило распространяется на текст, изображения, GIF, видео, аудио и другие медиафайлы.
 
@@ -7981,6 +7978,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
