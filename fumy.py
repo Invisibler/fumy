@@ -2994,7 +2994,7 @@ async def image_command(update: Update, context: CallbackContext) -> None:
 async def fhelp(update: Update, context: CallbackContext):
     # Заранее заготовленный текст
     help_text = """
-<blockquote expandable><b>Бот реагирует только в нескольких случаях:</b>
+<blockquote expandable><b>Бот реагирует только в двух случаях:</b>
 - если вы отвечаете на его сообщение
 - если ваше сообщение начинается с "фуми"
 
@@ -8012,6 +8012,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
