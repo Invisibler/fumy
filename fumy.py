@@ -43,8 +43,7 @@ from google.genai.types import (CreateCachedContentConfig, FunctionDeclaration,
 from matplotlib.dates import DayLocator
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import MaxNLocator
-from natasha import (Doc, MorphVocab, NewsEmbedding, NewsMorphTagger,
-                     Segmenter)
+
 from PIL import Image
 from pyrogram import Client
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
@@ -2065,8 +2064,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             task = asyncio.create_task(background_image_generation())
             context.user_data.setdefault('user_tasks', set()).add(task)
             task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
             return
+
 
 
         else:
@@ -2144,7 +2143,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_tasks_set = context.user_data.setdefault('user_tasks', set())
                 user_tasks_set.add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-                return             
+                history_dict.pop(chat_id, None)
+                return           
             elif original_message.photo:
                 waiting_message = await update.message.reply_text("Распознаю изображение...")
 
@@ -2238,6 +2238,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_tasks_set = context.user_data.setdefault('user_tasks', set())
                 user_tasks_set.add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
+                history_dict.pop(chat_id, None)
                 return
             elif original_message.video:
                 waiting_message = await update.message.reply_text("Обрабатываю видео...")
@@ -2289,7 +2290,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 task = asyncio.create_task(background_video_task())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
+                history_dict.pop(chat_id, None)
+                return
             elif original_message.audio:
                 waiting_message = await update.message.reply_text("Обрабатываю аудио...")
 
@@ -2341,7 +2343,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 task = asyncio.create_task(background_audio_task())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
+                history_dict.pop(chat_id, None)
+                return
             elif original_message.animation:
                 waiting_message = await update.message.reply_text("Думаю над гифкой...")
 
@@ -2407,7 +2410,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 task = asyncio.create_task(background_animation_processing())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
+                history_dict.pop(chat_id, None)
+                return
             elif original_message.voice:
                 waiting_message = await update.message.reply_text("Слушаю голосовое...")
 
@@ -2473,6 +2477,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 task = asyncio.create_task(background_voice_processing())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
+                history_dict.pop(chat_id, None)
+                return           
             return
 
 
@@ -2557,6 +2563,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_tasks_set = context.user_data.setdefault('user_tasks', set())
             user_tasks_set.add(task)
             task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
+            chat_histories.pop(chat_id, None)
         return
 
     if re.match(r"(?i)^фуми[,.!?;:-]?\s+(нарисуй|сгенерируй|создай)", message_text):
@@ -2637,7 +2644,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
+        chat_histories.pop(chat_id, None)
         return
 
 
@@ -2749,6 +2756,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
+        chat_histories.pop(chat_id, None)
         return
 
 
@@ -2843,7 +2851,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "reply_to": real_name,
                     "timestamp": current_time
                 })
-
+                chat_histories.pop(chat_id, None)
                 await waiting_message.delete()
 
             except Exception as e:
@@ -2860,6 +2868,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
+        chat_histories.pop(chat_id, None)
         return
 
 
@@ -2932,7 +2941,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
+        chat_histories.pop(chat_id, None)
 
 
 
@@ -2995,8 +3004,8 @@ async def fhelp(update: Update, context: CallbackContext):
     # Заранее заготовленный текст
     help_text = """
 <blockquote expandable><b>Бот реагирует только в двух случаях:</b>
-- если вы отвечаете на его сообщение
-- если ваше сообщение начинается с "фуми"
+- Если вы отвечаете на его сообщение
+- Если ваше сообщение начинается с "фуми"
 
 Это правило распространяется на текст, изображения, GIF, видео, аудио и другие медиафайлы.
 
@@ -3346,6 +3355,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "timestamp": current_time
                 })
                 bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+                chat_histories.pop(chat_id, None)
                 return
 
             # Генерация ответа, если подпись содержит "фуми" или это ответ
@@ -3379,7 +3389,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "timestamp": current_time
                 })
                 bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-
+                chat_histories.pop(chat_id, None)
             await waiting_message.delete()
 
         except Exception as e:
@@ -3509,9 +3519,10 @@ async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TY
             if local_file_path and os.path.exists(local_file_path):
                 try:
                     os.remove(local_file_path)
+                  
                 except Exception as cleanup_error:
                     logger.warning(f"Не удалось удалить временный файл: {cleanup_error}")
-
+            chat_histories.pop(chat_id, None)
         if is_reply_to_bot:
             try:
                 prompt = (
@@ -3533,6 +3544,7 @@ async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TY
                 save_chat_history_for_id(chat_id, chat_histories[chat_id])
                 bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
                 await waiting_message.delete()
+                chat_histories.pop(chat_id, None)
             except Exception as e:
                 logger.error(f"Ошибка при генерации ответа на стикер: {e}")
                 await waiting_message.edit_text("⚠️ Не удалось сгенерировать ответ на стикер.")
@@ -3647,7 +3659,7 @@ async def handle_video_sticker(update: Update, context: ContextTypes.DEFAULT_TYP
 
             bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             await waiting_message.delete()
-
+            chat_histories.pop(chat_id, None)   
         except Exception as e:
             logger.error(f"Ошибка при генерации ответа на видеостикер: {e}")
             await waiting_message.edit_text("⚠️ Не удалось получить ответ на видеостикер. Попробуйте позже.")
@@ -3762,6 +3774,7 @@ async def handle_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             await waiting_message.delete()
+            chat_histories.pop(chat_id, None)             
         except Exception as e:
             logger.error(f"Ошибка при генерации ответа на GIF: {e}")
             await waiting_message.edit_text("⚠️ Не удалось получить ответ на GIF. Попробуйте позже.")
@@ -3899,6 +3912,7 @@ async def summarize_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
 
             save_chat_history_for_id(chat_id, history)
+            chat_histories.pop(chat_id, None)          
             logger.info("Ответ на /mental_health добавлен в историю чата.")
         except Exception as e:
             logger.exception("Ошибка при генерации анализа чата: %s", e)
@@ -3946,6 +3960,7 @@ async def mental_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             save_chat_history_for_id(chat_id, chat_histories[chat_id])
             logger.info("Ответ на /mental_health добавлен в историю чата.")
+            chat_histories.pop(chat_id, None)            
         except Exception as e:
             logger.exception("Ошибка при анализе /mental_health: %s", e)
             await update.message.reply_text("Произошла ошибка при выполнении анализа.")
@@ -3988,6 +4003,7 @@ async def furry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_histories[chat_id].pop(0)
 
             save_chat_history_for_id(chat_id, chat_histories[chat_id])
+            chat_histories.pop(chat_id, None)
         except Exception as e:
             logger.exception("Ошибка при генерации фурри-образа: %s", e)
             await update.message.reply_text("Произошла ошибка при генерации образа.")
@@ -5265,11 +5281,6 @@ async def ytm(update: Update, context: CallbackContext):
 
 
 
-# Инициализация Natash
-segmenter = Segmenter()
-emb = NewsEmbedding()
-morph_tagger = NewsMorphTagger(emb)
-morph_vocab = MorphVocab()
 
 
 
@@ -5442,7 +5453,6 @@ async def todayall(update: Update, context: CallbackContext) -> None:
 
 
 
-
 async def today(update: Update, context: CallbackContext) -> None:
     if not context.args:
         await update.message.reply_text(
@@ -5457,6 +5467,7 @@ async def today(update: Update, context: CallbackContext) -> None:
     phrase = " ".join(context.args)
     chat_id = str(update.message.chat_id)  # ID чата строкой
     logger.info(f"chat_id: {chat_id}")          
+
     # Определяем, какие имена использовать
     if chat_id == "-1001475512721":
         user_names_dict = {
@@ -5479,11 +5490,11 @@ async def today(update: Update, context: CallbackContext) -> None:
     else:
         # Загружаем историю чата
         chat_history = load_chat_history_by_id(chat_id)
-        messages = chat_history if isinstance(chat_history, list) else []
-        logger.info(f"messages: {messages}") 
-        # Собираем уникальные имена (исключая "Бот")
-        user_names = {msg["role"] for msg in messages if msg["role"] != "Бот"}
+
+        # Сразу берём только роли, без хранения всей истории
+        user_names = {msg["role"] for msg in chat_history if msg.get("role") != "Бот"}
         logger.info(f"user_names: {user_names}") 
+
     # Если нет имен, не можем провести "голосование"
     if not user_names:
         await update.message.reply_text("Недостаточно данных о пользователях в этом чате.")
@@ -5512,59 +5523,17 @@ async def today(update: Update, context: CallbackContext) -> None:
     ax.barh(names, probabilities, color="skyblue")
     ax.set_xlabel("Вероятность (%)")
     ax.set_title(f"Кто сегодня {phrase}?")
-    ax.invert_yaxis()  # Инвертируем порядок, чтобы лидеры были сверху
+    ax.invert_yaxis()
     plt.grid(axis="x", linestyle="--", alpha=0.5)
 
-    # Сохранение в буфер
     img_buffer = io.BytesIO()
     plt.savefig(img_buffer, format="png", bbox_inches="tight")
     img_buffer.seek(0)
-    plt.close()
+    plt.close(fig)
 
-
-    segmenter = Segmenter()
-    morph_vocab = MorphVocab()
-    morph_tagger = NewsMorphTagger(NewsEmbedding())
-
-    # Определяем корректное окончание для всей фразы
-    doc = Doc(phrase)
-    doc.segment(segmenter)
-    doc.tag_morph(morph_tagger)
-
-    first_word = doc.tokens[0] if doc.tokens else None
-    if first_word:
-        first_word.lemmatize(morph_vocab)
-        lemma = first_word.lemma
-        pos = first_word.pos
-        if pos in ["VERB", "AUX"]:
-            phrase_for_leader = f"кто {phrase}"
-            gender = "Masc"
-            number = "Sing"
-        elif pos == "NOUN":  # Если первое слово существительное, склоняем по нему
-            gender = first_word.feats.get("Gender", "Masc")
-            number = first_word.feats.get("Number", "Sing")
-            phrase_for_leader = phrase  # Оставляем всю фразу
-        else:
-            phrase_for_leader = phrase
-            gender = "Masc"
-            number = "Sing"
-    else:
-        phrase_for_leader = phrase
-        gender = "Masc"
-        number = "Sing"
-
-    # Подбираем форму слова "главный"
-    if number == "Plur":
-        leader_phrase = f"главные {phrase_for_leader}"
-    elif gender == "Fem":
-        leader_phrase = f"главная {phrase_for_leader}"
-    elif gender == "Neut":
-        leader_phrase = f"главное {phrase_for_leader}"
-    else:
-        leader_phrase = f"главный {phrase_for_leader}"
-
+    # Упрощённый вариант без Natasha: всегда "главный"
     leader = sorted_results[0][0]
-    caption = f"\nПохоже, {leader} сегодня {leader_phrase} в этом чате 🎉"
+    caption = f"\nПохоже, {leader} сегодня главный {phrase} в этом чате 🎉"
 
     await update.message.reply_photo(photo=img_buffer, caption=caption)
 
@@ -8012,6 +7981,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
