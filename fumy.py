@@ -2176,7 +2176,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                         chat_history = chat_histories.setdefault(chat_id, [])
                         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
+                        # 🔹 Сохраняем описание распознанного изображения в историю/БД
+                        history_dict[chat_id].append({
+                            "role": "База знаний",
+                            "message": f"Бот распознал изображение следующим образом: {full_image_description}",
+                            "reply_to": real_name,
+                            "timestamp": current_time
+                        })
+                        save_history_func(chat_id, history_dict[chat_id])
                         current_request = (
                             f"[{real_name} ответил на одно из прошлых сообщений с изображением, которое ты ранее распознала следующим образом: "
                             f"\"{full_image_description}\". \n\nРаспознанный выше текст видишь исключительно ты, это служебная информация. "
@@ -2783,6 +2790,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Формируем запрос для генерации ответа
                 chat_history = chat_histories.setdefault(chat_id, [])
                 history_dict.setdefault(chat_id, [])
+
+                history_dict[chat_id].append({
+                    "role": "База знаний",
+                    "message": f"Бот распознал изображение следующим образом: {full_image_description}",
+                    "reply_to": real_name,
+                    "timestamp": current_time
+                })
+                save_history_func(chat_id, history_dict[chat_id])              
                 current_request = (
                     f"[{real_name} ответиил на одно из прошлых твоих изображений в чате, содержащим изображение, "
                     f"которое ты ранее распознала следующим образом: \"{full_image_description}\".\n\n"
@@ -7999,6 +8014,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
