@@ -2135,6 +2135,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         sent_message = await update.message.reply_text(response_text[:4096])
                         bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
                         await waiting_message.delete()
+                        history_dict.pop(chat_id, None)                        
                     except Exception as e:
                         logger.error(f"Ошибка при отправке ответа: {e}")
                         await waiting_message.edit_text("⚠️ Не удалось отправить ответ. Попробуйте позже.")
@@ -2143,7 +2144,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_tasks_set = context.user_data.setdefault('user_tasks', set())
                 user_tasks_set.add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-                history_dict.pop(chat_id, None)
+
                 return           
             elif original_message.photo:
                 waiting_message = await update.message.reply_text("Распознаю изображение...")
@@ -2233,12 +2234,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 os.remove(local_file_path)
                             except Exception as cleanup_error:
                                 logger.warning(f"Не удалось удалить временный файл изображения: {cleanup_error}")
-
+                        history_dict.pop(chat_id, None)
                 task = asyncio.create_task(background_photo_processing())
                 user_tasks_set = context.user_data.setdefault('user_tasks', set())
                 user_tasks_set.add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-                history_dict.pop(chat_id, None)
+
                 return
             elif original_message.video:
                 waiting_message = await update.message.reply_text("Обрабатываю видео...")
@@ -2286,11 +2287,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 os.remove(local_path)
                             except Exception as cleanup_error:
                                 logger.warning(f"Не удалось удалить временный видеофайл: {cleanup_error}")
-
+                        history_dict.pop(chat_id, None)
                 task = asyncio.create_task(background_video_task())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-                history_dict.pop(chat_id, None)
+
                 return
             elif original_message.audio:
                 waiting_message = await update.message.reply_text("Обрабатываю аудио...")
@@ -2339,11 +2340,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 os.remove(local_path)
                             except Exception as cleanup_error:
                                 logger.warning(f"Не удалось удалить временный аудиофайл: {cleanup_error}")
-
+                        history_dict.pop(chat_id, None)
                 task = asyncio.create_task(background_audio_task())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-                history_dict.pop(chat_id, None)
+
                 return
             elif original_message.animation:
                 waiting_message = await update.message.reply_text("Думаю над гифкой...")
@@ -2406,11 +2407,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 os.remove(local_file_path)
                             except Exception as cleanup_error:
                                 logging.warning(f"Не удалось удалить временный файл: {cleanup_error}")
-
+                        history_dict.pop(chat_id, None)
                 task = asyncio.create_task(background_animation_processing())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-                history_dict.pop(chat_id, None)
+
                 return
             elif original_message.voice:
                 waiting_message = await update.message.reply_text("Слушаю голосовое...")
@@ -2473,11 +2474,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 os.remove(local_file_path)
                             except Exception as cleanup_error:
                                 logging.warning(f"Не удалось удалить временный файл: {cleanup_error}")
-
+                        history_dict.pop(chat_id, None)
                 task = asyncio.create_task(background_voice_processing())
                 context.user_data.setdefault('user_tasks', set()).add(task)
                 task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-                history_dict.pop(chat_id, None)
+
                 return           
             return
 
@@ -2637,13 +2638,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         os.remove(image_path)
                     except Exception as cleanup_error:
                         logger.warning(f"Не удалось удалить временный файл: {cleanup_error}")
-
+                chat_histories.pop(chat_id, None)
         # Запускаем фоновую задачу
         task = asyncio.create_task(background_image_generation())
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-        chat_histories.pop(chat_id, None)
+
         return
 
 
@@ -2746,7 +2747,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 })
 
                 await waiting_message.delete()
-
+                chat_histories.pop(chat_id, None)
             except Exception as e:
                 logger.error(f"Ошибка при генерации изображения: {e}")
                 await waiting_message.edit_text("⚠️ Произошла ошибка при обработке изображения.")
@@ -2755,7 +2756,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-        chat_histories.pop(chat_id, None)
+
         return
 
 
@@ -2862,12 +2863,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         os.remove(image_file_path)
                     except Exception as cleanup_error:
                         logger.warning(f"Не удалось удалить временный файл: {cleanup_error}")
-
+                chat_histories.pop(chat_id, None)
         task = asyncio.create_task(background_image_processing())
         user_tasks_set = context.user_data.setdefault('user_tasks', set())
         user_tasks_set.add(task)
         task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-        chat_histories.pop(chat_id, None)
+
         return
 
 
@@ -7978,6 +7979,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
