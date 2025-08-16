@@ -18,9 +18,6 @@ pillow==11.1.0
 # Загрузка видео (например, с YouTube)
 yt-dlp==2025.3.26
 
-# Обработка естественного языка
-natasha==1.6.0
-
 # Firebase SDK
 firebase-admin==6.5.0
 
@@ -29,3 +26,4 @@ google-generativeai==0.8.4
 google-genai==1.5.0
 
 setuptools==78.1.0
+
