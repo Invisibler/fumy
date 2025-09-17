@@ -314,12 +314,23 @@ def save_game_history_for_id(chat_id: str, messages: list):
 
 MAX_CHAT_HISTORY_FULL = 10000  # лимит сообщений для полной истории чата
 
+# Список разрешённых chat_id, для которых ведётся история
+ALLOWED_CHAT_IDS = {
+    "123456789",   # пример
+    "987654321",   # ещё пример
+}
+
 def save_chat_history_full_for_id(chat_id: str, messages: list):
     """
-    Сохраняет полную историю чата для любого chat_id в Firebase Realtime Database.
+    Сохраняет полную историю чата только для разрешённых chat_id в Firebase Realtime Database.
     Сохраняет только уникальные сообщения. Ограничивает длину истории до MAX_CHAT_HISTORY_FULL.
     """
     try:
+        # Игнорируем все чаты, кроме разрешённых
+        if str(chat_id) not in ALLOWED_CHAT_IDS:
+            logger.debug(f"История для chat_id {chat_id} не сохраняется (не в списке).")
+            return
+
         if not firebase_admin._DEFAULT_APP_NAME:
             logger.error("Firebase приложение не инициализировано. Невозможно сохранить полную историю чата.")
             return
@@ -348,7 +359,6 @@ def save_chat_history_full_for_id(chat_id: str, messages: list):
         logger.error(f"Ошибка Firebase при сохранении полной истории чата для chat_id {chat_id}: {e}")
     except Exception as e:
         logger.error(f"Неожиданная ошибка при сохранении полной истории чата в Firebase: {e}")
-
 
 
 
@@ -3032,8 +3042,6 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/dice</code> — кинуть кубик
 <code>/rpg</code> — узнать свои характеристики
 <code>/role</code> — выбрать роль для бота
-<code>/stat</code> — ваша статистика
-<code>/statall</code> — статистика всего чата
 <code>/fd</code> — удалить сообщение бота к которому обращена эта команда
 
 <b>Команды с текстом после них:</b>
@@ -7979,6 +7987,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
