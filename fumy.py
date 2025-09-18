@@ -216,6 +216,56 @@ relevant_context = {}  # Локальный облегчённый контек�
 
 
 
+def save_chat_role(chat_id: str, role_key: str, user_role: str = None, user_id: str = None):
+    """
+    Сохраняет выбранную роль для чата в Firebase.
+    role_key: либо ключ из ROLES, либо "user".
+    user_role: текст пользовательской роли (если есть).
+    user_id: id пользователя, создавшего роль (если роль пользовательская).
+    """
+    try:
+        ref = db.reference(f'roles/{chat_id}')
+        data = {
+            "current_role": role_key
+        }
+        if role_key == "user" and user_role:
+            data["user_role"] = user_role
+            if user_id:
+                data["userid"] = user_id  # <-- сохраняем под отдельным ключом
+        ref.update(data)
+        logger.info(f"Роль для чата {chat_id} сохранена: {data}")
+    except exceptions.FirebaseError as e:
+        logger.error(f"Ошибка Firebase при сохранении роли для чата {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при сохранении роли: {e}")
+def load_chat_role(chat_id: str):
+    """
+    Загружает текущую роль для чата из Firebase.
+    Возвращает (role_key, user_role).
+    """
+    try:
+        ref = db.reference(f'roles/{chat_id}')
+        data = ref.get()
+        if not data:
+            return "role0", None  # по умолчанию "фуми"
+        
+        role_key = data.get("current_role", "role0")
+        user_role = data.get("user_role")
+        return role_key, user_role
+    except exceptions.FirebaseError as e:
+        logger.error(f"Ошибка Firebase при загрузке роли для чата {chat_id}: {e}")
+        return "role0", None
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при загрузке роли: {e}")
+        return "role0", None
+
+
+
+
+
+
+
+
 
 # Функция для добавления сообщения в relevant_context для конкретного чата
 def add_to_relevant_context(chat_id, message):
@@ -404,7 +454,25 @@ async def fumy_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("История сообщений чата полностью очищена. Бот готов к диалогу с чистого листа!")
   
+async def full_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
 
+    # Удаляем из памяти
+    games_histories.pop(chat_id, None)
+    chat_histories.pop(chat_id, None)
+    chat_histories_full.pop(chat_id, None)
+    roles.pop(chat_id, None)
+    relevant_context.pop(chat_id, None)
+
+    # Удаляем из Firebase
+    db.reference(f'games_histories/{chat_id}').delete()
+    db.reference(f'chat_histories/{chat_id}').delete()
+    db.reference(f'chat_histories_full/{chat_id}').delete()
+    db.reference(f'roles/{chat_id}').delete()
+
+    await update.message.reply_text(
+        "Все состояния, роли и история чата очищены. Бот готов к новой игре или диалогу!"
+    )
 
 
 
@@ -712,7 +780,7 @@ async def Generate_gemini_image(prompt):
     try:
 
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash-preview-image-generation",
+            model="gemini-2.5-flash-image-preview",
             contents=context,
             config=types.GenerateContentConfig(
                 temperature=1,
@@ -906,41 +974,86 @@ def split_role_list():
     return role_list_parts
 
 async def set_role(update: Update, context: CallbackContext) -> None:
-    """Меняет роль для данного чата и обрабатывает генерацию слова в "Крокодиле"."""
-    chat_id = update.effective_chat.id
+    """Меняет или показывает роль для данного чата."""
+    chat_id = str(update.effective_chat.id)
     args = context.args
 
+    # Если без аргументов -> показать список
     if not args:
-        role_list_parts = split_role_list()
-        for part in role_list_parts:
-            await update.message.reply_text(f"Доступные роли:\n{part}", parse_mode="HTML")
+        role_key, user_role = load_chat_role(chat_id)
+        current_role = user_role if role_key == "user" and user_role else ROLES.get(role_key, ("фуми", ""))[0]
+
+        response = f"<b>Текущая роль:</b>{role_key}\n\nДля смены роли на свою собственную введите её промпт после команды <code>/role</code>. Например:\n<pre>/role пьяный гном в таверне</pre>\n\nЧтобы вернуться к стандартной роли фуми введите <code>/role role0</code> (или любую иную из списка ниже). Так же вы можете в любой момент заново выбрать последнюю вашу созданную роль введя <code>/role user</code>.\n\n<blockquote expandable>Внимание! При смене ролей история текущего чата сбрасывается в базе данных.</blockquote>\n\n━━━━━━━━─ㅤ❪✸❫ㅤ─━━━━━━━━\n\n<b>Список ролей:</b>\n\n"
+
+        # Если есть пользовательская роль, показываем её первой
+        if user_role:
+            response += (
+                f"<code>/role user</code> - Пользовательская роль\n"
+                f"<blockquote expandable>{user_role}</blockquote>\n\n"
+            )
+
+        # Остальные роли
+        for key, (prompt, desc) in ROLES.items():
+            role_entry = (
+                f"<code>/role {key}</code> - {desc}\n"
+                f"<blockquote expandable>{prompt}</blockquote>\n\n"
+                if key != "role0" else f"<code>/role {key}</code> - {desc}\n\n"
+            )
+
+            if len(response) + len(role_entry) > MAX_TELEGRAM_LENGTH:
+                await update.message.reply_text(response, parse_mode="HTML")
+                response = role_entry
+            else:
+                response += role_entry
+
+        # Добавляем фразу в конец
+        response += "Для сброса всех состояний, ролей и истории чата в случае возникновения проблем, воспользуйтесь командой /restart"
+
+        if response:
+            await update.message.reply_text(response, parse_mode="HTML")
         return
 
+    # Загружаем текущую роль из БД
+    old_role, _ = load_chat_role(chat_id)
+
+    # Если ввели аргумент
     role_key = args[0]
 
+    # Проверяем встроенные роли
+    if role_key in ROLES:
+        save_chat_role(chat_id, role_key)
+        await update.message.reply_text(f"Роль изменена на: {ROLES[role_key][1]}")
+
+        # Проверка переходов
+        if (old_role.startswith("role") and role_key == "user") or (old_role == "user" and role_key.startswith("role")):
+            # Переход встроенная <-> пользовательская
+            await fumy_restart(update, context)
+        elif old_role.startswith("role") and role_key.startswith("role") and old_role != role_key:
+            # Переход между встроенными
+            await fumy_game_restart(update, context)
+
+        return
+
+    # Особый случай "Крокодил"
     if role_key == "role7" and len(args) > 1 and args[1] == "сброс":
-        # Генерируем новый список слов и выбираем одно
         generated_text = await generate_word(chat_id)
         word = extract_random_word(generated_text)
-        chat_words[chat_id] = word
+        chat_words[int(chat_id)] = word
         await update.message.reply_text("Слово изменено")
         return
 
-    if role_key in ROLES:
-        prompt, desc = ROLES[role_key]
-        chat_roles[chat_id] = role_key
+    # Если не совпало ни с одной встроенной ролью → сохраняем как пользовательскую
+    user_role_text = " ".join(args).strip()
+    if user_role_text:
+        user_id = str(update.effective_user.id)  # <-- добавляем ID автора
+        save_chat_role(chat_id, "user", user_role_text, user_id=user_id)
+        await update.message.reply_text("Пользовательская роль сохранена.")
 
-        # Если выбрали "Крокодил", генерируем слово сразу
-        if role_key == "role7":
-            generated_text = await generate_word(chat_id)
-            word = extract_random_word(generated_text)
-            chat_words[chat_id] = word
-            logger.info(f"word: {word}")            
-            prompt = prompt.format(word=word)  # Вставляем слово в промпт
-
-        await update.message.reply_text(f"Роль изменена на: {desc}")
+        # Проверка перехода встроенная <-> пользовательская
+        if old_role.startswith("role"):
+            await fumy_restart(update, context)
     else:
-        await update.message.reply_text("Такой роли нет")
+        await update.message.reply_text("Некорректная роль.")
 
 def extract_random_word(text: str) -> str:
     """Извлекает случайное слово из сгенерированного списка."""
@@ -1050,13 +1163,15 @@ def log_with_number(message):
 
 async def generate_gemini_response(query, chat_context, chat_id):
     """Генерирует ответ от модели Gemini на текстовый запрос с учетом контекста чата и выбранной роли."""
-    logger.info(f"chat_roles: {chat_roles} (type: {type(chat_roles)})")  
-    logger.info(f"chat_id: {chat_id} (type: {type(chat_id)})") 
-    role_key = chat_roles.get(int(chat_id), "role0")
-    logger.info(f"role_key: {role_key}")     
-    logger.info(f"chat_words: {chat_words} (type: {type(chat_words)})")
 
-    system_instruction = ROLES[role_key]
+    role_key, user_role = load_chat_role(str(chat_id))
+
+    # Определяем системную инструкцию
+    if role_key == "user" and user_role:
+        system_instruction = (user_role, "Пользовательская роль")
+    else:
+        system_instruction = ROLES.get(role_key, ROLES["role0"])
+
     if role_key == "role7":
         word = chat_words.get(int(chat_id), "неизвестное слово")  # Защита от отсутствия слова
         system_instruction = (system_instruction[0].format(word=word), system_instruction[1])      
@@ -1916,15 +2031,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_to_user = None
     message_id = update.message.message_id
 
-    # Определяем роль для данного чата
-    role_key = chat_roles.get(int(chat_id), "role0")
-    
-    # Выбираем соответствующую историю на основе роли
-    if role_key != "role0":
+    # 🔹 Определяем роль для данного чата через Firebase
+    role_key, user_role = load_chat_role(chat_id)
+
+    # 🔹 Выбираем историю на основе роли
+    if role_key not in ("role0", "user"):  
+        # игровые режимы
         history_dict = games_histories
         save_history_func = save_game_history_for_id
         load_history_func = load_game_history_by_id
     else:
+        # обычные роли (встроенная role0 или пользовательская user)
         history_dict = chat_histories
         save_history_func = save_chat_history_for_id
         load_history_func = load_chat_history_by_id
@@ -2902,8 +3019,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                 history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
 
-            logger.info("История чата после добавления сообщения: %s", history_dict[chat_id])
-
             # Формирование контекста чата для ответа
             chat_context = "\n".join([
                 f"{msg.get('role', 'Неизвестный')} ответил {msg.get('reply_to', 'всем')}: [{msg.get('message', '')}] (в {msg.get('timestamp', '-')})"
@@ -2939,7 +3054,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(history_dict[chat_id]) > MAX_HISTORY_LENGTH:
                     history_dict[chat_id].pop(0)
 
-                logger.info("История чата после добавления ответа бота: %s", history_dict[chat_id])
+
                 save_history_func(chat_id, history_dict[chat_id])
                 await waiting_message.delete()
 
@@ -3216,7 +3331,7 @@ async def generate_inpaint_gemini(image_file_path: str, instructions: str):
         ]
 
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash-exp-image-generation",
+            model="gemini-2.5-flash-image-preview",
             contents=[
                 types.Content(
                     role="user",
@@ -7940,10 +8055,11 @@ def main():
     application.add_handler(CommandHandler("mental", mental_health))
     application.add_handler(CommandHandler("fr", fumy_restart)) 
     application.add_handler(CommandHandler("fgr", fumy_game_restart)) 
+    application.add_handler(CommandHandler("restart", full_restart))
     application.add_handler(CommandHandler("astro", astrologic)) 
     application.add_handler(CommandHandler("chatday", chatday)) 
-    application.add_handler(CommandHandler("stat", handle_stat_command))
-    application.add_handler(CommandHandler("statall", handle_statall_command))    
+    application.add_handler(CommandHandler("sstat", handle_stat_command))
+    application.add_handler(CommandHandler("sstatall", handle_statall_command))    
   
 
 
@@ -7987,6 +8103,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
