@@ -2621,7 +2621,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.reply_to_message:
         reply_to_user_username = update.message.reply_to_message.from_user.username or update.message.reply_to_message.from_user.first_name
         reply_to_user = user_names_map.get(reply_to_user_username, reply_to_user_username)
-    logging.info(f"Получен запрос: {user_message}")
     # Проверяем, является ли сообщение прямым ответом боту
     is_direct_reply_to_bot = (
         update.message.reply_to_message and
@@ -8112,6 +8111,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
