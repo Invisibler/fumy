@@ -1160,22 +1160,27 @@ def log_with_number(message):
         f.write(f"\n\n=============================================================\n{log_counter}\n{message}\n")
     log_counter += 1
 
-
 async def generate_gemini_response(query, chat_context, chat_id):
     """Генерирует ответ от модели Gemini на текстовый запрос с учетом контекста чата и выбранной роли."""
 
     role_key, user_role = load_chat_role(str(chat_id))
+    logger.info(f"role_key: {role_key}, user_role: {user_role}")
 
     # Определяем системную инструкцию
     if role_key == "user" and user_role:
-        system_instruction = (user_role, "Пользовательская роль")
+        system_instruction = (
+            f"Ниже тебе будет дана пользовательская роль, заданная пользователем в телеграм чате. "
+            f"Ты должен строго придерживаться её и вести себя в соответствии с описанием.\n\n"
+            f"Роль: {user_role}",
+            "Пользовательская роль"
+        )
     else:
         system_instruction = ROLES.get(role_key, ROLES["role0"])
 
     if role_key == "role7":
         word = chat_words.get(int(chat_id), "неизвестное слово")  # Защита от отсутствия слова
         system_instruction = (system_instruction[0].format(word=word), system_instruction[1])      
-    logger.info(f"system_instruction: {system_instruction}") 
+
     context = (
         f"У чата есть история диалога, используй её:\n\n{chat_context}\n\n"
         f"Последние сообщения находятся внизу. Если есть вопросы, они вероятно связаны с этим. Квадратные скобки и прочая служебная информация нужны только для удобства просмотра истории, использовать их не нужно.\n\n"
@@ -1184,6 +1189,8 @@ async def generate_gemini_response(query, chat_context, chat_id):
     )
 
     log_with_number(f"context: {context}")
+    system_instruction = system_instruction[0]  # только это отправляется в Gemini    
+    logger.info(f"system_instruction: {system_instruction}")     
     try:
         # Создаём клиент с правильным ключом
         google_search_tool = Tool(
@@ -8103,6 +8110,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
