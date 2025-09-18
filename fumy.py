@@ -780,7 +780,7 @@ async def Generate_gemini_image(prompt):
     try:
 
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash-image-preview",
+            model="gemini-2.0-flash-exp-image-generation",
             contents=context,
             config=types.GenerateContentConfig(
                 temperature=1,
@@ -3338,7 +3338,7 @@ async def generate_inpaint_gemini(image_file_path: str, instructions: str):
         ]
 
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash-image-preview",
+            model="gemini-2.0-flash-exp-image-generation",
             contents=[
                 types.Content(
                     role="user",
@@ -8110,6 +8110,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
