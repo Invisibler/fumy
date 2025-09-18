@@ -2921,9 +2921,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await file.download_to_drive(image_file_path)
 
                 relevant_cont = "\n".join([
-                    f"{msg['role']} ответил {msg['reply_to'] or 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
+                    f"{msg['role']} ответил {msg.get('reply_to') or 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
                     for msg in relevant_context.get(chat_id, [])
                 ])
+
 
                 # Распознавание изображения
                 full_image_description = await recognize_image_with_gemini(
@@ -2951,8 +2952,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"чтобы в рамках твоей роли ответить на вопрос пользователя: {message_text}]"
                 )
 
+
                 chat_context = "\n".join([
-                    f"{msg['role']} ответил {msg['reply_to'] or 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
+                    f"{msg['role']} ответил {msg.get('reply_to') or 'всем'}: [{msg['message']}] (в {msg['timestamp']})"
                     for msg in history_dict[chat_id]
                 ])
                 gemini_context = f"История чата:\n{chat_context}\n"
@@ -8110,6 +8112,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
