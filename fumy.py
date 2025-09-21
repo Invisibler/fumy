@@ -59,7 +59,7 @@ import random
 
 # Telegram Bot Token и Google API Key
 TELEGRAM_BOT_TOKEN = "7027286115:AAFTS-mK2ajoXB4wTuvS0NmiHi2R2TDBrIo"
-GOOGLE_API_KEY = "AIzaSyDPsMGw8-CD4yK1FtGEKiq5X8jgcXVZxos" 
+GOOGLE_API_KEY = "AIzaSyANeoDLkH9KAjNlumpV1PGpNyIpjpgdjL4" 
  
 
 
@@ -8111,6 +8111,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
