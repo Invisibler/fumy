@@ -816,16 +816,13 @@ async def send_reply_with_limit_v2(text, max_length=4096):
 
 
 
-async def Generate_gemini_image(prompt):
-    context = (
-        f"{prompt}" 
-    )     
+async def Generate_gemini_image(prompt: str):
+    context = f"{prompt}"
     model_name = "gemini-2.0-flash-exp-image-generation"
 
-    # Получаем ключи для попытки (последний удачный будет первым)
+    # Получаем ключи для перебора (сначала последний удачный, если он был)
     keys_to_try = key_manager.get_keys_to_try()
 
-    for api_key in keys_to_try:  
     for api_key in keys_to_try:
         try:
             logger.info(f"Попытка генерации изображения: модель='{model_name}', ключ=...{api_key[-4:]}")
@@ -837,56 +834,47 @@ async def Generate_gemini_image(prompt):
             response = await client.aio.models.generate_content(
                 model=model_name,
                 contents=context,
-                generation_config=GenerationConfig(
+                config=types.GenerateContentConfig(
                     temperature=1,
                     top_p=0.95,
                     top_k=40,
                     max_output_tokens=8192,
+                    response_modalities=["image", "text"],
+                    safety_settings=[
+                        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_CIVIC_INTEGRITY", threshold="BLOCK_NONE"),
+                    ],
+                    response_mime_type="text/plain",
                 ),
-                 # Настройки безопасности в формате списка словарей
-                safety_settings=[
-                    {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                ]
             )
 
-            # Обработка успешного ответа
-            caption = None
-            image_url = None
-            
-            # Извлекаем данные из ответа
-            # Примечание: структура ответа может отличаться, этот код адаптирован под стандартный ответ
-            if response.candidates and response.candidates[0].content.parts:
-                # Ищем изображение и текст
+            caption, image_url = None, None
+
+            if response and response.candidates and response.candidates[0].content.parts:
                 for part in response.candidates[0].content.parts:
-                    if part.mime_type.startswith("image/"):
-                        image_data = part.inline_data.data
-                        image = Image.open(BytesIO(image_data))
+                    if part.text is not None:
+                        caption = part.text
+                    elif part.inline_data is not None:
+                        # Обработка изображения
+                        image = Image.open(BytesIO(part.inline_data.data))
                         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
                             image.save(temp_file.name, format="PNG")
                             image_url = temp_file.name
-                    elif part.text:
-                        caption = part.text
 
-                if image_url:
-                    logger.info(f"Успех! Изображение сгенерировано. Ключ=...{api_key[-4:]}")
-                    # Запоминаем удачный ключ
-                    await key_manager.set_successful_key(api_key)
-                    # Возвращаем результат
-                    return caption, image_url
-                else:
-                    logger.warning(f"Неудача: ответ получен, но не содержит изображения. Ключ=...{api_key[-4:]}")
+                # Успех — фиксируем рабочий ключ
+                await key_manager.set_successful_key(api_key)
+                return caption, image_url
             else:
-                 logger.warning(f"Неудача: получен пустой ответ от API. Ключ=...{api_key[-4:]}")
+                logger.warning(f"Пустой ответ от API. Ключ=...{api_key[-4:]}")
 
         except Exception as e:
-            logger.error(f"Неудача: Ошибка при генерации изображения. Ключ=...{api_key[-4:]}. Ошибка: {e}")
-            # Ничего не делаем, просто переходим к следующему ключу в цикле
-            continue
-    
-    # Если цикл завершился, значит ни один ключ не сработал
+            logger.error(f"Ошибка при генерации изображения. Ключ=...{api_key[-4:]}. Ошибка: {e}")
+            continue  # Пробуем следующий ключ
+
+    # Если дошли сюда — ни один ключ не сработал
     logger.error("Полный провал: ни один API ключ не сработал для генерации изображения.")
     return None, None
 
@@ -1241,47 +1229,68 @@ async def generate_gemini_response(query, chat_context, chat_id):
         for api_key in keys_to_try:
             try:
                 logger.info(f"Попытка: модель='{model_name}', ключ=...{api_key[-4:]}")
-                
+
                 # Создаём клиент с текущим ключом
                 client = genai.Client(api_key=api_key)
-                
-                # Ваш код запроса к API
-                google_search_tool = Tool(google_search=GoogleSearch())
-                
+
+                # Инструменты
+                google_search_tool = Tool(
+                    google_search=GoogleSearch()
+                )
+
+                # Запрос к API
                 response = await client.aio.models.generate_content(
                     model=model_name,
                     contents=context,
-                    # В новой версии библиотеки google-generativeai используется GenerationConfig
-                    generation_config=GenerationConfig(
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
                         temperature=1.4,
                         top_p=0.95,
                         top_k=25,
                         max_output_tokens=7000,
-                    ),
-                    system_instruction=system_instruction,
-                    tools=[google_search_tool],
-                    safety_settings=[
-                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                    ]
+                        tools=[google_search_tool],
+                        safety_settings=[
+                            types.SafetySetting(
+                                category='HARM_CATEGORY_HATE_SPEECH',
+                                threshold='BLOCK_NONE'
+                            ),
+                            types.SafetySetting(
+                                category='HARM_CATEGORY_HARASSMENT',
+                                threshold='BLOCK_NONE'
+                            ),
+                            types.SafetySetting(
+                                category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                                threshold='BLOCK_NONE'
+                            ),
+                            types.SafetySetting(
+                                category='HARM_CATEGORY_DANGEROUS_CONTENT',
+                                threshold='BLOCK_NONE'
+                            )
+                        ]
+                    )
                 )
 
-                # Обработка успешного ответа (ваш код)
+                logger.info("Содержимое response: %s", response)
+
                 if response.candidates and response.candidates[0].content.parts:
                     bot_response = "".join(
                         part.text for part in response.candidates[0].content.parts
                         if part.text and not getattr(part, "thought", False)
                     ).strip()
-                    
-                    # Если все прошло успешно:
+
                     logger.info(f"Успех! Модель='{model_name}', ключ=...{api_key[-4:]}")
-                    await key_manager.set_successful_key(api_key) # Запоминаем удачный ключ
+                    await key_manager.set_successful_key(api_key)  # Запоминаем удачный ключ
                     return bot_response
                 else:
-                    # Gemini вернул пустой ответ - это тоже неудача для данного ключа
                     logger.warning(f"Неудача: Gemini вернул пустой ответ. Модель='{model_name}', ключ=...{api_key[-4:]}")
+                    
+                    if hasattr(response, '__dict__'):
+                        logger.info("Содержимое response: %s", response.__dict__)
+                    else:
+                        logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
+
+                    return "Извините, я не могу ответить на этот запрос."
+
 
             except Exception as e:
                 # Ловим любую ошибку (например, невалидный ключ, проблемы с доступом и т.д.)
@@ -1588,13 +1597,13 @@ async def generate_audio_response(audio_file_path: str, command_text: str, conte
                         temperature=1.4,
                         top_p=0.95,
                         top_k=25,
-                    ),
-                    safety_settings=[
-                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                    ]
+                        safety_settings=[
+                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                        ]                      
+                    )
                 )
 
                 if response.candidates and response.candidates[0].content.parts:
@@ -4677,18 +4686,13 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = f"Текущий запрос: {user_message}\n\n"
     logger.info("Промпт для Gemini: %s", prompt)
 
+    # Отправляем "ожидание" и запоминаем это сообщение
     waiting_message = await update.message.reply_text("🔍 Ищу информацию...")
 
     async def background_search():
-        google_search_tool = Tool(
-            google_search=GoogleSearch()
-        )
+        google_search_tool = Tool(google_search=GoogleSearch())
 
         async def try_with_keys_and_model(model_name: str) -> str | None:
-            """
-            Пробует выполнить запрос, перебирая ключи для одной модели.
-            Возвращает ответ или None, если все ключи не сработали.
-            """
             for key in key_manager.get_keys_to_try():
                 try:
                     temp_client = genai.Client(api_key=key)
@@ -4712,7 +4716,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"response from {model_name} with {key[:10]}...: {response}")
 
                     if response.candidates and response.candidates[0].content.parts:
-                        await key_manager.set_successful_key(key)  # запоминаем удачный ключ
+                        await key_manager.set_successful_key(key)
                         generated_answer = "".join(
                             part.text for part in response.candidates[0].content.parts
                             if part.text and not getattr(part, "thought", False)
@@ -4725,27 +4729,28 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 1. Пробуем основную модель
         result = await try_with_keys_and_model(PRIMARY_MODEL)
 
-        # 2. Если не получилось — пробуем запасные модели
+        # 2. Если не получилось — пробуем запасные
         if not result:
             for fallback_model in FALLBACK_MODELS:
                 result = await try_with_keys_and_model(fallback_model)
                 if result:
                     break
 
-        # 3. Если всё равно пусто — сообщаем пользователю
+        # 3. Если пусто — редактируем сообщение с ошибкой
         if not result:
-            await update.message.reply_text("К сожалению, не удалось обработать запрос ни с одной моделью.")
+            await waiting_message.edit_text("К сожалению, не удалось обработать запрос ни с одной моделью.")
             return
 
-        # Форматируем и отправляем ответ
-        escaped_answer = escape(result)  # твоя функция экранирования HTML
+        # Форматируем ответ
+        escaped_answer = escape(result)
         html_response = f"<blockquote expandable>{escaped_answer}</blockquote>"
 
-        sent_message = await update.message.reply_text(
+        # Редактируем исходное сообщение вместо отправки нового
+        await waiting_message.edit_text(
             html_response[:4096], parse_mode=ParseMode.HTML
         )
 
-        bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+        bot_message_ids.setdefault(chat_id, []).append(waiting_message.message_id)
 
     asyncio.create_task(background_search())
 
@@ -8298,6 +8303,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
