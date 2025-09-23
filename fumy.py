@@ -59,7 +59,17 @@ import random
 
 # Telegram Bot Token и Google API Key
 TELEGRAM_BOT_TOKEN = "7027286115:AAFTS-mK2ajoXB4wTuvS0NmiHi2R2TDBrIo"
-GOOGLE_API_KEY = "AIzaSyBO-BSI0varRQW35mNwJr87hUv-jhQvxiw" 
+API_KEYS = [
+    "AIzaSyBO-BSI0varRQW35mNwJr87hUv-jhQvxiw",  # Ваш старый ключ
+    "AIzaSyANeoDLkH9KAjNlumpV1PGpNyIpjpgdjL4",
+    "AIzaSyDPsMGw8-CD4yK1FtGEKiq5X8jgcXVZxos",
+    "AIzaSyBcsrPrBIO2GRj88SiY-dSJ5Y40E0ep-5I"
+]
+
+# 2. Укажите основную и запасные модели
+PRIMARY_MODEL = 'gemini-2.5-flash' # Модель, которую пробуем в первую очередь
+FALLBACK_MODELS = ['gemini-2.5-flash-preview-05-20', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-exp'] # Модели на случай, если с основной ничего не вышло
+
  
 
 
@@ -88,8 +98,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Настройка Google Generative AI
-
-client = genai.Client(api_key=GOOGLE_API_KEY)
 
 
 
@@ -148,7 +156,42 @@ def split_message(text, max_length=MAXTG_MESSAGE_LENGTH):
 
 
 
+class ApiKeyManager:
+    """
+    Класс для управления API-ключами.
+    Запоминает последний удачный ключ и использует его первым.
+    Потокобезопасен для асинхронной среды.
+    """
+    def __init__(self, api_keys: list):
+        if not api_keys:
+            raise ValueError("Список API ключей не может быть пустым.")
+        self.api_keys = api_keys
+        self._last_successful_key = None
+        self._lock = asyncio.Lock()
 
+    def get_keys_to_try(self) -> list:
+        """
+        Возвращает список ключей для перебора, ставя последний удачный ключ на первое место.
+        """
+        keys_to_try = []
+        if self._last_successful_key and self._last_successful_key in self.api_keys:
+            keys_to_try.append(self._last_successful_key)
+        
+        # Добавляем остальные ключи, избегая дублирования
+        for key in self.api_keys:
+            if key not in keys_to_try:
+                keys_to_try.append(key)
+        return keys_to_try
+
+    async def set_successful_key(self, key: str):
+        """
+        Асинхронно и безопасно устанавливает последний удачный ключ.
+        """
+        async with self._lock:
+            self._last_successful_key = key
+
+
+key_manager = ApiKeyManager(api_keys=API_KEYS)
 
 ALLOWED_USER_ID = 6217936347
 async def fumy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -776,67 +819,76 @@ async def send_reply_with_limit_v2(text, max_length=4096):
 async def Generate_gemini_image(prompt):
     context = (
         f"{prompt}" 
-    )        
-    try:
+    )     
+    model_name = "gemini-2.0-flash-exp-image-generation"
 
-        response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash-exp-image-generation",
-            contents=context,
-            config=types.GenerateContentConfig(
-                temperature=1,
-                top_p=0.95,
-                top_k=40,
-                max_output_tokens=8192,
-                response_modalities=[
-                    "image",
-                    "text",
-                ],
+    # Получаем ключи для попытки (последний удачный будет первым)
+    keys_to_try = key_manager.get_keys_to_try()
+
+    for api_key in keys_to_try:  
+    for api_key in keys_to_try:
+        try:
+            logger.info(f"Попытка генерации изображения: модель='{model_name}', ключ=...{api_key[-4:]}")
+
+            # Создаем клиент с текущим ключом
+            client = genai.Client(api_key=api_key)
+
+            # Выполняем запрос к API
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=context,
+                generation_config=GenerationConfig(
+                    temperature=1,
+                    top_p=0.95,
+                    top_k=40,
+                    max_output_tokens=8192,
+                ),
+                 # Настройки безопасности в формате списка словарей
                 safety_settings=[
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HARASSMENT",
-                        threshold="BLOCK_NONE",  # Block none
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HATE_SPEECH",
-                        threshold="BLOCK_NONE",  # Block none
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        threshold="BLOCK_NONE",  # Block none
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                        threshold="BLOCK_NONE",  # Block none
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_CIVIC_INTEGRITY",
-                        threshold="BLOCK_NONE",  # Block none
-                    ),
-                ],
-                response_mime_type="text/plain",
-            ),
-        )
+                    {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                ]
+            )
 
-        caption = None
-        image_url = None
+            # Обработка успешного ответа
+            caption = None
+            image_url = None
+            
+            # Извлекаем данные из ответа
+            # Примечание: структура ответа может отличаться, этот код адаптирован под стандартный ответ
+            if response.candidates and response.candidates[0].content.parts:
+                # Ищем изображение и текст
+                for part in response.candidates[0].content.parts:
+                    if part.mime_type.startswith("image/"):
+                        image_data = part.inline_data.data
+                        image = Image.open(BytesIO(image_data))
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                            image.save(temp_file.name, format="PNG")
+                            image_url = temp_file.name
+                    elif part.text:
+                        caption = part.text
 
-        for part in response.candidates[0].content.parts:
-            if part.text is not None:
-                caption = part.text  # Сохраняем текстовую подпись
-            elif part.inline_data is not None:
-                # Обработка изображения
-                image = Image.open(BytesIO(part.inline_data.data))
-                
-                # Создаем временный файл для изображения
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-                    image.save(temp_file.name, format="PNG")
-                    image_url = temp_file.name  # Используем путь к временному файлу
+                if image_url:
+                    logger.info(f"Успех! Изображение сгенерировано. Ключ=...{api_key[-4:]}")
+                    # Запоминаем удачный ключ
+                    await key_manager.set_successful_key(api_key)
+                    # Возвращаем результат
+                    return caption, image_url
+                else:
+                    logger.warning(f"Неудача: ответ получен, но не содержит изображения. Ключ=...{api_key[-4:]}")
+            else:
+                 logger.warning(f"Неудача: получен пустой ответ от API. Ключ=...{api_key[-4:]}")
 
-        return caption, image_url
-
-    except Exception as e:
-        logger.error(f"Ошибка при генерации изображения: {e}")
-        return None, None  
+        except Exception as e:
+            logger.error(f"Неудача: Ошибка при генерации изображения. Ключ=...{api_key[-4:]}. Ошибка: {e}")
+            # Ничего не делаем, просто переходим к следующему ключу в цикле
+            continue
+    
+    # Если цикл завершился, значит ни один ключ не сработал
+    logger.error("Полный провал: ни один API ключ не сработал для генерации изображения.")
+    return None, None
 
 # Словарь с ролями
 ROLES = {
@@ -1064,7 +1116,7 @@ def extract_random_word(text: str) -> str:
 
 
 async def generate_word(chat_id):
-
+    model_name = 'gemini-2.5-flash-lite'
     context = (
         f"Твоя цель - сгенерировать 100 слов подходящая для игры в крокодил. Это должны быть как простые слова, так и какие-нибудь интересные слова которые достаточно сложно отгадать, но они должны быть общеизвестными. Они могут быть из любой области науки, культуры, общества, интернета и тд"
         f"Старайся избегать глаголов и имён собственных. "     
@@ -1072,58 +1124,51 @@ async def generate_word(chat_id):
         f"Эти слова должны быть знакомы большинству людей. "           
         f"В ответ пришли список слов в следующем формате: 1: слово1 2: слово2 3: слово3 и тд"     
     )
-    try:
-        # Создаём клиент с правильным ключом
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash-lite',
-            contents=context,  # Здесь передаётся переменная context
-            config=types.GenerateContentConfig(
-                temperature=1.7,
-                top_p=0.9,
-                top_k=40,
-                max_output_tokens=2500,
-                #presence_penalty=1.0,
-                #frequency_penalty=0.8,
+    keys_to_try = key_manager.get_keys_to_try()
+
+    for api_key in keys_to_try:
+        try:
+            logger.info(f"Попытка генерации слов: модель='{model_name}', ключ=...{api_key[-4:]}")
+
+            # Создаём клиент с текущим ключом
+            client = genai.Client(api_key=api_key)
+
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=context,
+                generation_config=GenerationConfig(
+                    temperature=1.7,
+                    top_p=0.9,
+                    top_k=40,
+                    max_output_tokens=2500,
+                ),
                 safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
+                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
                 ]
             )
-        )     
-   
-        if response.candidates and response.candidates[0].content.parts:
-            bot_response = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Ответ от Gemini: %s", bot_response)
-            return bot_response
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            # Проверяем, есть ли какие-либо дополнительные данные в response
-            if hasattr(response, '__dict__'):
-                logger.info("Содержимое response: %s", response.__dict__)
+
+            if response.candidates and response.candidates[0].content.parts:
+                bot_response = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text
+                ).strip()
+                
+                logger.info(f"Успех! Слова сгенерированы. Ключ=...{api_key[-4:]}")
+                await key_manager.set_successful_key(api_key)
+                return bot_response
             else:
-                logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-            
-            return "Извините, я не могу ответить на этот запрос."
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        return "Ошибка при обработке запроса. Попробуйте снова."
+                logger.warning(f"Неудача: Gemini вернул пустой ответ. Ключ=...{api_key[-4:]}")
+
+        except Exception as e:
+            logger.error(f"Неудача: Ошибка при генерации слов. Ключ=...{api_key[-4:]}. Ошибка: {e}")
+            continue
+
+    # Если ни один ключ не сработал
+    logger.error("Полный провал: ни один API ключ не сработал для генерации слов.")
+    return "Ошибка при обработке запроса. Попробуйте снова."
 
 
 
@@ -1188,66 +1233,68 @@ async def generate_gemini_response(query, chat_context, chat_id):
         f"Продолжи диалог как живой собеседник. Избегай фраз вроде Бот ответил...,избегай квадратных скобок или указания времени, они нужны только в истории"
     )
 
-    log_with_number(f"context: {context}")
     system_instruction = system_instruction[0]  # только это отправляется в Gemini    
     logger.info(f"system_instruction: {system_instruction}")     
-    try:
-        # Создаём клиент с правильным ключом
-        google_search_tool = Tool(
-            google_search=GoogleSearch()
-        )
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=context,  # Здесь передаётся переменная context
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                max_output_tokens=7000,
-                #presence_penalty=0.7,
-                #frequency_penalty=0.7,
-                tools=[google_search_tool],
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
+    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+    keys_to_try = key_manager.get_keys_to_try()  
+    for model_name in models_to_try:
+        for api_key in keys_to_try:
+            try:
+                logger.info(f"Попытка: модель='{model_name}', ключ=...{api_key[-4:]}")
+                
+                # Создаём клиент с текущим ключом
+                client = genai.Client(api_key=api_key)
+                
+                # Ваш код запроса к API
+                google_search_tool = Tool(google_search=GoogleSearch())
+                
+                response = await client.aio.models.generate_content(
+                    model=model_name,
+                    contents=context,
+                    # В новой версии библиотеки google-generativeai используется GenerationConfig
+                    generation_config=GenerationConfig(
+                        temperature=1.4,
+                        top_p=0.95,
+                        top_k=25,
+                        max_output_tokens=7000,
                     ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]
-            )
-        )     
-        logger.info("Содержимое response: %s", response)     
-        if response.candidates and response.candidates[0].content.parts:
+                    system_instruction=system_instruction,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                    ]
+                )
 
-            bot_response = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            return bot_response
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            # Проверяем, есть ли какие-либо дополнительные данные в response
-            if hasattr(response, '__dict__'):
-                logger.info("Содержимое response: %s", response.__dict__)
-            else:
-                logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-            
-            return "Извините, я не могу ответить на этот запрос."
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        return "Ошибка при обработке запроса."
+                # Обработка успешного ответа (ваш код)
+                if response.candidates and response.candidates[0].content.parts:
+                    bot_response = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text and not getattr(part, "thought", False)
+                    ).strip()
+                    
+                    # Если все прошло успешно:
+                    logger.info(f"Успех! Модель='{model_name}', ключ=...{api_key[-4:]}")
+                    await key_manager.set_successful_key(api_key) # Запоминаем удачный ключ
+                    return bot_response
+                else:
+                    # Gemini вернул пустой ответ - это тоже неудача для данного ключа
+                    logger.warning(f"Неудача: Gemini вернул пустой ответ. Модель='{model_name}', ключ=...{api_key[-4:]}")
+
+            except Exception as e:
+                # Ловим любую ошибку (например, невалидный ключ, проблемы с доступом и т.д.)
+                logger.error(f"Неудача: Ошибка при запросе к Gemini. Модель='{model_name}', ключ=...{api_key[-4:]}. Ошибка: {e}")
+                # Переходим к следующему ключу
+                continue
+        
+        # Если все ключи для текущей модели не сработали, логгируем это
+        logger.warning(f"Все ключи не сработали для модели: {model_name}. Перехожу к следующей модели.")
+
+    # Если ни один ключ и ни одна модель не сработали
+    logger.error("Полный провал: ни один API ключ и ни одна модель не сработали.")
+    return "Извините, сервис временно недоступен. Попробуйте повторить запрос позже."
 
 
 
@@ -1505,82 +1552,78 @@ async def generate_audio_response(audio_file_path: str, command_text: str, conte
     :return: ответ от Gemini.
     """
 
-    try:
-        if not command_text:
-            command_text = "распознай текст либо опиши содержание аудио, если текста нет."
+    # 2. Подготовка к перебору
+    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+    keys_to_try = key_manager.get_keys_to_try()
+    audio_path = pathlib.Path(audio_file_path)
 
-        # Проверяем существование файла
-        if not os.path.exists(audio_file_path):
-            logging.error(f"Файл {audio_file_path} не существует.")
-            return "Аудиофайл недоступен. Попробуйте снова."
+    # 3. Двойной цикл перебора
+    for model_name in models_to_try:
+        for api_key in keys_to_try:
+            try:
+                logger.info(f"Попытка обработки аудио: модель='{model_name}', ключ=...{api_key[-4:]}")
 
-        # Подготовка пути файла
-        audio_path = pathlib.Path(audio_file_path)
-        try:
-        # Загрузка файла через Gemini API
-            file_upload = client.files.upload(file=audio_path)
-        except Exception as e:
-            print(f"Error uploading file: {e}")
-            return None
-        # Проверяем успешность загрузки файла
+                # Создаем клиент для текущего ключа
+                client = genai.Client(api_key=api_key)
 
-        logger.info(f"audio_path: {audio_path}")  
-        # Генерация ответа через Gemini
+                # Загружаем файл. Эта операция тоже зависит от ключа.
+                # Примечание: client.files.upload - синхронная операция.
+                file_upload = client.files.upload(file=audio_path)
+                logger.info(f"Файл {audio_path.name} успешно загружен, URI: {file_upload.uri}")
 
-        safety_settings = [
-            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
-        ]
-        
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_uri(
-                            file_uri=file_upload.uri,
-                            mime_type=file_upload.mime_type
-                        )
+                # Формируем контент для запроса
+                contents = [
+                    Part.from_uri(
+                        file_uri=file_upload.uri,
+                        mime_type=file_upload.mime_type
+                    ),
+                    command_text
+                ]
+
+                # Делаем запрос на генерацию контента
+                response = await client.aio.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    generation_config=GenerationConfig(
+                        temperature=1.4,
+                        top_p=0.95,
+                        top_k=25,
+                    ),
+                    safety_settings=[
+                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
                     ]
-                ),
-                command_text  # Здесь будет ваш текст команды
-            ],
-            config=types.GenerateContentConfig(
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                #presence_penalty=0.7,
-                #frequency_penalty=0.7,
-                safety_settings=safety_settings
-            )            
-        )
-        logger.info(f"response: {response}")  
-        # Проверка ответа
-        if not response.candidates:
-            logging.warning("Gemini вернул пустой список кандидатов.")
-            return "Извините, я не могу обработать этот аудиофайл."
+                )
 
-        if not response.candidates[0].content.parts:
-            logging.warning("Ответ Gemini не содержит частей контента.")
-            return "Извините, я не могу обработать этот аудиофайл."
+                if response.candidates and response.candidates[0].content.parts:
+                    bot_response = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text
+                    ).strip()
+                    
+                    logger.info(f"Успех! Аудио обработано. Модель='{model_name}', ключ=...{api_key[-4:]}")
+                    await key_manager.set_successful_key(api_key)
+                    
+                    # Не забываем удалить загруженный файл с серверов Google после использования
+                    client.files.delete(name=file_upload.name)
+                    logger.info(f"Временный файл {file_upload.name} удален.")
+                    
+                    return bot_response
+                else:
+                    logger.warning(f"Неудача: Gemini вернул пустой ответ для аудио. Модель='{model_name}', ключ=...{api_key[-4:]}")
 
-        # Извлечение текста ответа
-        bot_response = "".join(
-            part.text for part in response.candidates[0].content.parts
-            if part.text and not getattr(part, "thought", False)
-        ).strip()
-        return bot_response
+            except Exception as e:
+                logger.error(f"Неудача: Ошибка при обработке аудио. Модель='{model_name}', ключ=...{api_key[-4:]}. Ошибка: {e}")
+                # Переходим к следующему ключу
+                continue
+        
+        logger.warning(f"Все ключи не сработали для модели: {model_name}. Перехожу к следующей.")
 
-    except FileNotFoundError as fnf_error:
-        logging.error(f"Файл не найден: {fnf_error}")
-        return "Аудиофайл не найден. Проверьте путь к файлу."
-
-    except Exception as e:
-        logging.error("Ошибка при обработке аудиофайла с Gemini:", exc_info=True)
-        return "Ошибка при обработке аудиофайла. Попробуйте снова."
+    # 4. Если все попытки провалились
+    logger.error("Полный провал: ни один API ключ и ни одна модель не сработали для обработки аудио.")
+    return "Ошибка при обработке аудиофайла. Сервис временно недоступен."
 
 
 
@@ -1591,13 +1634,11 @@ async def generate_audio_response(audio_file_path: str, command_text: str, conte
 async def generate_video_response(video_file_path: str, command_text: str, context="") -> str:
     """
     Обрабатывает путь к видеофайлу и команду, генерируя ответ с помощью Gemini.
-
-    :param video_file_path: путь к видеофайлу.
-    :param command_text: текст команды для обработки видео.
-    :return: ответ от Gemini.
+    Перебирает ключи и модели по заданной логике.
     """
     logging.info(f"video_file_path: {video_file_path}") 
     logging.info(f"command_text: {command_text}")       
+
     try:
         if not command_text:
             command_text = "Опишите содержание видео или распознайте текст, если он есть."
@@ -1607,10 +1648,9 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
             logger.error(f"Файл {video_file_path} не существует.")
             return "Видео недоступно. Попробуйте снова."
 
-        # Загрузка файла через API Gemini
+        # Загрузка файла
         video_path = pathlib.Path(video_file_path)
         logger.info(f"Uploading video file: {video_path}")
-
         try:
             video_file = client.files.upload(file=video_path)
         except Exception as e:
@@ -1628,78 +1668,74 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
             return "Не удалось обработать видео. Попробуйте снова."
 
         logger.info(f"Video processing complete: {video_file.uri}")
-        # Генерация ответа через Gemini
+
+        # Настройки безопасности
         safety_settings = [
             types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
             types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
             types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
             types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
         ]
-        
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_uri(
-                            file_uri=video_file.uri,
-                            mime_type=video_file.mime_type
+
+        # Перебор моделей
+        models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+        for model in models_to_try:
+            logger.info(f"Пробуем модель: {model}")
+            # Перебор ключей
+            for key in key_manager.get_keys_to_try():
+                try:
+                    local_client = genai.Client(api_key=key)
+                    response = await local_client.aio.models.generate_content(
+                        model=model,
+                        contents=[
+                            types.Content(
+                                role="user",
+                                parts=[
+                                    types.Part.from_uri(
+                                        file_uri=video_file.uri,
+                                        mime_type=video_file.mime_type
+                                    )
+                                ]
+                            ),
+                            command_text
+                        ],
+                        config=types.GenerateContentConfig(
+                            temperature=1.2,
+                            top_p=0.9,
+                            top_k=40,
+                            safety_settings=safety_settings
                         )
-                    ]
-                ),
-                command_text  # Текст команды пользователя
-            ],
-            config=types.GenerateContentConfig(
-                temperature=1.2,
-                top_p=0.9,
-                top_k=40,
-                #presence_penalty=0.5,
-                #frequency_penalty=0.5,
-                safety_settings=[
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    types.SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
                     )
-                ]
-            )
-        )
-        logger.info(f"Vresponsee: {response}")
 
-        # Проверка ответа
-        if not response.candidates:
-            logging.warning("Gemini вернул пустой список кандидатов.")
-            return "Извините, я не могу обработать это видео."
+                    # Проверка результата
+                    if not response.candidates or not response.candidates[0].content.parts:
+                        logger.warning(f"Пустой ответ от модели {model} с ключом {key}")
+                        continue
 
-        if not response.candidates[0].content.parts:
-            logging.warning("Ответ Gemini не содержит частей контента.")
-            return "Извините, я не могу обработать это видео."
+                    # Извлечение текста
+                    bot_response = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text and not getattr(part, "thought", False)
+                    ).strip()
 
-        # Извлечение текста ответа
-        bot_response = "".join(
-            part.text for part in response.candidates[0].content.parts
-            if part.text and not getattr(part, "thought", False)
-        ).strip()
-        return bot_response
+                    # Сохраняем удачный ключ
+                    await key_manager.set_successful_key(key)
+                    return bot_response
+
+                except Exception as e:
+                    logger.warning(f"Ошибка при запросе (модель={model}, ключ={key}): {e}")
+                    continue  # Пробуем следующий ключ
+
+        # Если дошли сюда — все ключи и модели не сработали
+        logger.error("Все ключи и модели исчерпаны.")
+        return "Извините, не удалось обработать видео. Все доступные ключи и модели исчерпаны."
 
     except FileNotFoundError as fnf_error:
-        logging.error(f"Файл не найден: {fnf_error}")
+        logger.error(f"Файл не найден: {fnf_error}")
         return "Видео не найдено. Проверьте путь к файлу."
 
     except Exception as e:
-        logging.error("Ошибка при обработке видео с Gemini:", exc_info=True)
+        logger.error("Ошибка при обработке видео с Gemini:", exc_info=True)
         return "Ошибка при обработке видео. Попробуйте снова."
 
 
@@ -1945,81 +1981,72 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def translate_promt_with_gemini(prompt):
-    if prompt:
-        # Проверяем наличие кириллических символов
-        contains_cyrillic = bool(re.search("[а-яА-Я]", prompt))
+    if not prompt:
+        return ""
 
-        logger.info(f"Содержит кириллицу: {contains_cyrillic}")
+    # Проверяем наличие кириллических символов
+    contains_cyrillic = bool(re.search("[а-яА-Я]", prompt))
+    logger.info(f"Содержит кириллицу: {contains_cyrillic}")
 
-        # Если кириллицы нет, возвращаем текст без изменений
-        if not contains_cyrillic:
-            return prompt
+    # Если кириллицы нет, возвращаем текст без изменений
+    if not contains_cyrillic:
+        return prompt
 
-        # Если текст не на английском, переводим его
-        context = (
-            f"Ты бот для перевода промптов с русского на английский. Переведи запрос в качестве промпта для генерации изображения на английский язык. "
-            f"В ответ пришли исключительно готовый промт на английском языке и ничего более. Это важно для того чтобы код корректно сработал. "
-            f"Даже если запрос странный и не определённый, то переведи его и верни перевод. Не предлагай варианты, всегда присылай именно один переведённый промпт."
-            f"Текущий запрос:\n{prompt}"
-        )
+    # Контекст для перевода
+    context = (
+        f"Ты бот для перевода промптов с русского на английский. Переведи запрос в качестве промпта для генерации изображения на английский язык. "
+        f"В ответ пришли исключительно готовый промт на английском языке и ничего более. Это важно для того чтобы код корректно сработал. "
+        f"Даже если запрос странный и не определённый, то переведи его и верни перевод. Не предлагай варианты, всегда присылай именно один переведённый промпт."
+        f"Текущий запрос:\n{prompt}"
+    )
 
-        max_retries = 2  # Максимальное количество повторных попыток
-        retry_delay = 3  # Задержка между попытками в секундах
+    # Настройки генерации
+    gen_config = types.GenerateContentConfig(
+        temperature=1.2,
+        top_p=0.95,
+        top_k=25,
+        tools=[Tool(google_search=GoogleSearch())],
+        safety_settings=[
+            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+        ]
+    )
 
-        for attempt in range(max_retries + 1):  # Первая попытка + две повторные
+    # Сначала пробуем основную модель
+    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+
+    for model in models_to_try:
+        logger.info(f"Пробуем модель: {model}")
+        keys_to_try = key_manager.get_keys_to_try()
+
+        for key in keys_to_try:
             try:
-                # Создаём клиент с правильным ключом
-                client = genai.Client(api_key=GOOGLE_API_KEY)
-                google_search_tool = Tool(google_search=GoogleSearch()) 
+                client = genai.Client(api_key=key)
                 response = await client.aio.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=context,  # Здесь передаётся переменная context
-                    config=types.GenerateContentConfig(               
-                        temperature=1.2,
-                        top_p=0.95,
-                        top_k=25,
-                        #max_output_tokens=1000,
-                        #presence_penalty=0.7,
-                        #frequency_penalty=0.7,
-                        tools=[google_search_tool],
-                        safety_settings=[
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_HATE_SPEECH',
-                                threshold='BLOCK_NONE'
-                            ),
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_HARASSMENT',
-                                threshold='BLOCK_NONE'
-                            ),
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                                threshold='BLOCK_NONE'
-                            ),
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                                threshold='BLOCK_NONE'
-                            )
-                        ]
-                    )
-                )     
-           
+                    model=model,
+                    contents=context,
+                    config=gen_config
+                )
+
                 if response.candidates and response.candidates[0].content.parts:
-                    response = "".join(
-                                part.text for part in response.candidates[0].content.parts
-                                if part.text and not getattr(part, "thought", False)
+                    result = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text and not getattr(part, "thought", False)
                     ).strip()
 
-                    return response
-                else:
-                    logging.warning("Ответ от модели не содержит текстового компонента.")
-                    return "Извините, я не могу ответить на этот запрос."
+                    if result:
+                        # Сохраняем успешный ключ
+                        await key_manager.set_successful_key(key)
+                        return result
 
+                logging.warning("Ответ от модели не содержит текстового компонента.")
             except Exception as e:
-                logging.error(f"Ошибка при генерации ответа (попытка {attempt + 1}): {e}")
-                if attempt < max_retries:
-                    await asyncio.sleep(retry_delay)  # Ждём перед следующей попыткой
-                else:
-                    return "Ошибка при обработке запроса. Попробуйте снова."
+                logging.error(f"Ошибка при работе с ключом {key} и моделью {model}: {e}")
+
+    # Если дошли сюда — ничего не вышло
+    return "Ошибка: все ключи и модели недоступны. Попробуйте позже."
 
 
 
@@ -3215,84 +3242,100 @@ def format_chat_context(chat_history, current_request):
 async def recognize_image_with_gemini(image_file_path: str, prompt="", context=""):
     """
     Распознаёт изображение с использованием модели Gemini, загружая файл изображения.
+    Перебирает ключи, а затем модели (если все ключи не сработали).
     :param image_file_path: Локальный путь к изображению.
     :param prompt: Дополнительное текстовое описание.
     :param context: Контекст запроса.
     :return: Распознанный текст или сообщение об ошибке.
     """
-    try:
-        if not os.path.exists(image_file_path):
-            logger.error(f"Файл {image_file_path} не найден.")
-            return "Ошибка: изображение не найдено."
-        
-        image_path = pathlib.Path(image_file_path)
-        logger.info(f"Uploading image file: {image_path}")
+    if not os.path.exists(image_file_path):
+        logger.error(f"Файл {image_file_path} не найден.")
+        return "Ошибка: изображение не найдено."
 
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        lower_prompt = prompt.lower()
-        if "переведи" in lower_prompt or "распознай" in lower_prompt:
-            instructions = f"{prompt}\nРаспознай текст на картинке и переведи на русский, если текст уже не на нём."
-        else:
-            instructions = (
-                f"Опиши подробно изображение на русском языке. А так же ответь на текущий запрос пользователя если это возможно: {prompt}\n"
-                if prompt else "Опиши подробно изображение на русском языке."
-            )
-        logger.info(f"instructions: {instructions}")         
-        try:
-            image_file = client.files.upload(file=image_path)
-        except Exception as e:
-            logger.error(f"Ошибка при загрузке изображения: {e}")
-            return "Не удалось загрузить изображение."
-        
-        logger.info(f"Image uploaded: {image_file.uri}")
+    image_path = pathlib.Path(image_file_path)
+    logger.info(f"Uploading image file: {image_path}")
 
-        safety_settings = [
-            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
-        ]
-
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash-lite-preview-06-17',
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_uri(
-                            file_uri=image_file.uri,
-                            mime_type=image_file.mime_type
-                        ),
-                        types.Part(text=instructions),
-                    ]
-                )
-            ],
-            config=types.GenerateContentConfig(
-                temperature=1.0,
-                top_p=0.9,
-                top_k=40,
-                #max_output_tokens=1000,
-                #presence_penalty=0.6,
-                #frequency_penalty=0.6,
-                response_modalities=["text"],
-                safety_settings=safety_settings,
-            ),
+    lower_prompt = prompt.lower()
+    if "переведи" in lower_prompt or "распознай" in lower_prompt:
+        instructions = f"{prompt}\nРаспознай текст на картинке и переведи на русский, если текст уже не на нём."
+    else:
+        instructions = (
+            f"Опиши подробно изображение на русском языке. А также ответь на текущий запрос пользователя если это возможно: {prompt}\n"
+            if prompt else "Опиши подробно изображение на русском языке."
         )
+    logger.info(f"instructions: {instructions}")
 
-        if response.candidates and response.candidates[0].content.parts:
-            recognized_text = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Распознанный текст от Gemini: %s", recognized_text)
-            return recognized_text
-        else:
-            logger.warning("Gemini не вернул ответ на запрос для изображения.")
-            return "Извините, я не смог распознать изображение."
+    safety_settings = [
+        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+    ]
 
-    except Exception as e:
-        logger.error("Ошибка при распознавании изображения: %s", e)
-        return "Произошла ошибка при обработке изображения. Попробуйте снова."
+    # Сначала пробуем основную модель, затем запасные
+    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+
+    for model in models_to_try:
+        logger.info(f"Пробуем модель: {model}")
+        keys_to_try = key_manager.get_keys_to_try()
+
+        for key in keys_to_try:
+            try:
+                client = genai.Client(api_key=key)
+                try:
+                    image_file = client.files.upload(file=image_path)
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке изображения: {e}")
+                    return "Не удалось загрузить изображение."
+
+                logger.info(f"Image uploaded: {image_file.uri}")
+
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=[
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_uri(
+                                    file_uri=image_file.uri,
+                                    mime_type=image_file.mime_type
+                                ),
+                                types.Part(text=instructions),
+                            ]
+                        )
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=1.0,
+                        top_p=0.9,
+                        top_k=40,
+                        response_modalities=["text"],
+                        safety_settings=safety_settings,
+                    ),
+                )
+
+                if response.candidates and response.candidates[0].content.parts:
+                    recognized_text = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text and not getattr(part, "thought", False)
+                    ).strip()
+                    logger.info("Распознанный текст от Gemini: %s", recognized_text)
+
+                    # Запоминаем удачный ключ
+                    await key_manager.set_successful_key(key)
+
+                    return recognized_text
+                else:
+                    logger.warning(f"Модель {model} не вернула ответ для изображения.")
+                    # пробуем следующий ключ
+                    continue
+
+            except Exception as e:
+                logger.error(f"Ошибка с ключом {key} и моделью {model}: {e}")
+                continue
+
+    # Если ни один ключ и ни одна модель не подошли
+    return "Извините, не удалось обработать изображение ни с одной моделью и ключом."
+
 
 
 
@@ -3315,76 +3358,87 @@ async def generate_inpaint_gemini(image_file_path: str, instructions: str):
             logger.error(f"Файл {image_file_path} не существует.")
             return None, "Ошибка: изображение не найдено."
 
-        # Загружаем изображение в Google Gemini
         image_path = pathlib.Path(image_file_path)
         logger.info(f"Uploading image file: {image_path}")
 
-        client = genai.Client(api_key=GOOGLE_API_KEY)
+        # Перебираем ключи через ApiKeyManager
+        for api_key in key_manager.get_keys_to_try():
+            try:
+                client = genai.Client(api_key=api_key)
 
-        try:
-            image_file = client.files.upload(file=image_path)
-            logger.info(f"image_file: {image_file}")            
-        except Exception as e:
-            logger.error(f"Ошибка при загрузке изображения: {e}")
-            return None, "Не удалось загрузить изображение."
+                try:
+                    image_file = client.files.upload(file=image_path)
+                    logger.info(f"image_file: {image_file}")
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке изображения (ключ {api_key}): {e}")
+                    continue
 
-        logger.info(f"Image uploaded: {image_file.uri}")
+                logger.info(f"Image uploaded: {image_file.uri}")
 
-        # Отправляем изображение в Gemini
-        safety_settings = [
-            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-        ]
+                # Отправляем изображение в Gemini
+                safety_settings = [
+                    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                ]
 
-        response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash-exp-image-generation",
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_uri(
-                            file_uri=image_file.uri,
-                            mime_type=image_file.mime_type
-                        ),
-                        types.Part(text=instructions),
-                    ]
+                response = await client.aio.models.generate_content(
+                    model="gemini-2.0-flash-exp-image-generation",
+                    contents=[
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_uri(
+                                    file_uri=image_file.uri,
+                                    mime_type=image_file.mime_type
+                                ),
+                                types.Part(text=instructions),
+                            ]
+                        )
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=1.0,
+                        top_p=0.95,
+                        top_k=40,
+                        response_modalities=["image", "text"],
+                        safety_settings=safety_settings,
+                    ),
                 )
-            ],
-            config=types.GenerateContentConfig(
-                temperature=1.0,
-                top_p=0.95,
-                top_k=40,
-                response_modalities=["image", "text"],
-                safety_settings=safety_settings,
-            ),
-        )
 
+                if not response.candidates:
+                    logging.warning("Gemini вернул пустой список кандидатов.")
+                    continue
 
-        if not response.candidates:
-            logging.warning("Gemini вернул пустой список кандидатов.")
-            return None, "Извините, я не могу обработать это изображение."
+                if not response.candidates[0].content.parts:
+                    logging.warning("Ответ Gemini не содержит частей контента.")
+                    continue
 
-        if not response.candidates[0].content.parts:
-            logging.warning("Ответ Gemini не содержит частей контента.")
-            return None, "Извините, я не могу обработать это изображение."
+                # Извлекаем данные ответа (изображение + текст)
+                image_data = None
+                response_text = ""
 
-        # Извлекаем данные ответа (изображение + текст)
-        image_data = None
-        response_text = ""
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data:
+                        image_data = part.inline_data.data
+                    if part.text:
+                        response_text = part.text.strip()
 
-        for part in response.candidates[0].content.parts:
-            if part.inline_data:
-                image_data = part.inline_data.data
-            if part.text:
-                response_text = part.text.strip()
+                if image_data:
+                    # Запоминаем удачный ключ
+                    await key_manager.set_successful_key(api_key)
+                    return image_data, response_text
 
-        return image_data, response_text
+            except Exception as e:
+                logger.error(f"Ошибка при работе с ключом {api_key}: {e}", exc_info=True)
+                continue
+
+        return None, "Извините, не удалось обработать изображение ни с одним ключом."
 
     except Exception as e:
         logger.error("Ошибка при обработке изображения с Gemini:", exc_info=True)
         return None, "Ошибка при обработке изображения."
+
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_time = update.message.date.astimezone(utc_plus_3)
@@ -4187,7 +4241,6 @@ async def simulate_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif target_user in real_names_map:
         real_name = user_names_map[real_names_map[target_user]]
     else:
-        # Если пользователь не найден, используем переданное имя
         real_name = None
 
     # Извлечение истории чата из Firebase
@@ -4201,7 +4254,7 @@ async def simulate_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{msg['role']} ответил {msg.get('reply_to', 'всем')}: [{msg['message']}] (в {msg['timestamp']})"
         for msg in full_chat_history
     ])
-    # Формирование промпта на основе наличия известного пользователя
+
     if real_name:
         context_for_simulation = (
             f"Не используй квадратные скобки в своём ответе\n"       
@@ -4235,39 +4288,62 @@ async def simulate_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     waiting_message = await update.message.reply_text("Генерирую сообщение...")
 
+    waiting_message = await update.message.reply_text("Генерирую сообщение...")
+
     async def background_simulation():
-        try:
-            response = await client.aio.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=context_for_simulation,
-                config=types.GenerateContentConfig(
-                    temperature=1.4,
-                    top_p=0.95,
-                    top_k=25,
-                    max_output_tokens=10000,
-                    safety_settings=[
-                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                    ]
+        keys_to_try = key_manager.get_keys_to_try()
+
+        async def try_generate(api_key: str, model: str):
+            local_client = genai.Client(api_key=api_key)
+            try:
+                response = await local_client.aio.models.generate_content(
+                    model=model,
+                    contents=context_for_simulation,
+                    config=types.GenerateContentConfig(
+                        temperature=1.4,
+                        top_p=0.95,
+                        top_k=25,
+                        max_output_tokens=10000,
+                        safety_settings=[
+                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                        ]
+                    )
                 )
-            )
-            logger.info("Ответ от Gemini: %s", response)
+                if response.candidates and response.candidates[0].content.parts:
+                    simulated_message = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text and not getattr(part, "thought", False)
+                    ).strip()
 
-            if response.candidates and response.candidates[0].content.parts:
-                simulated_message = "".join(
-                    part.text for part in response.candidates[0].content.parts
-                    if part.text and not getattr(part, "thought", False)
-                ).strip()
+                    if simulated_message:
+                        await key_manager.set_successful_key(api_key)
+                        return simulated_message
+            except Exception as e:
+                logger.warning(f"Ошибка при генерации (ключ {api_key}, модель {model}): {e}")
+            return None
 
+        # 1. Пробуем основной моделью по всем ключам
+        for key in keys_to_try:
+            simulated_message = await try_generate(key, PRIMARY_MODEL)
+            if simulated_message:
                 sent_message = await update.message.reply_text(simulated_message[:4096])
                 bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-            else:
-                await update.message.reply_text("Извините, я не могу сгенерировать сообщение.")
-        except Exception as e:
-            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-            await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
+                return
+
+        # 2. Пробуем запасными моделями
+        for fallback_model in FALLBACK_MODELS:
+            for key in keys_to_try:
+                simulated_message = await try_generate(key, fallback_model)
+                if simulated_message:
+                    sent_message = await update.message.reply_text(simulated_message[:4096])
+                    bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+                    return
+
+        # 3. Если вообще ничего не сработало
+        await update.message.reply_text("Не удалось сгенерировать сообщение: все ключи и модели оказались недоступны.")
 
     asyncio.create_task(background_simulation())
 
@@ -4308,46 +4384,58 @@ async def dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_message = await update.message.reply_text("🎲 Кидаем кубик, обрабатываю результат...")
 
     async def background_dice():
-        try:
-            response = await client.aio.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=1.5,
-                    top_p=0.95,
-                    top_k=25,
-                    safety_settings=[
-                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                    ]                
-                )
-            )
+        # Сначала пробуем основную модель
+        models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+        success = False
 
-            if response.candidates and response.candidates[0].content.parts:
-                generated_story = "".join(
-                    part.text for part in response.candidates[0].content.parts
-                    if part.text and not getattr(part, "thought", False)
-                ).strip()
-                await context.bot.edit_message_text(
-                    chat_id=update.message.chat_id,
-                    message_id=waiting_message.message_id,
-                    text=f"🎲 Бросок кубика: {roll}\n\n{generated_story[:4096]}"
-                )
-            else:
-                await context.bot.edit_message_text(
-                    chat_id=update.message.chat_id,
-                    message_id=waiting_message.message_id,
-                    text=f"🎲 Бросок кубика: {roll}\n\nК сожалению, результат не удалось обработать."
-                )
+        for model in models_to_try:
+            for key in key_manager.get_keys_to_try():
+                try:
+                    temp_client = genai.Client(api_key=key)  # создаём клиент с текущим ключом
 
-        except Exception as e:
-            logger.error("Ошибка при обращении к Gemini: %s", e)
+                    response = await temp_client.aio.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=1.5,
+                            top_p=0.95,
+                            top_k=25,
+                            safety_settings=[
+                                types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                            ]
+                        )
+                    )
+
+                    if response.candidates and response.candidates[0].content.parts:
+                        generated_story = "".join(
+                            part.text for part in response.candidates[0].content.parts
+                            if part.text and not getattr(part, "thought", False)
+                        ).strip()
+
+                        await key_manager.set_successful_key(key)  # запоминаем удачный ключ
+                        await context.bot.edit_message_text(
+                            chat_id=update.message.chat_id,
+                            message_id=waiting_message.message_id,
+                            text=f"🎲 Бросок кубика: {roll}\n\n{generated_story[:4096]}"
+                        )
+                        success = True
+                        return
+
+                except Exception as e:
+                    logger.error("Ошибка при обращении к Gemini (модель %s, ключ %s): %s", model, key, e)
+                    continue  # пробуем следующий ключ/модель
+
+            if success:
+                break
+
+        if not success:
             await context.bot.edit_message_text(
                 chat_id=update.message.chat_id,
                 message_id=waiting_message.message_id,
-                text=f"🎲 Бросок кубика: {roll}\n\nОшибка обработки результата."
+                text=f"🎲 Бросок кубика: {roll}\n\nК сожалению, все ключи и модели не сработали."
             )
 
     asyncio.create_task(background_dice())
@@ -4402,48 +4490,60 @@ async def rpg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_message = await update.message.reply_text("Генерирую твои характеристики...")
 
     async def background_rpg():
-        try:
-            google_search_tool = Tool(
-                google_search=GoogleSearch()
-            )
-            response = await client.aio.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=1.4,
-                    top_p=0.95,
-                    top_k=25,
-                    tools=[google_search_tool],
-                    safety_settings=[
-                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                    ]
-                )
-            )
+        google_search_tool = Tool(google_search=GoogleSearch())
+        safety_settings = [
+            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+        ]
 
-            if response.candidates and response.candidates[0].content.parts:
-                generated_answer = "".join(
-                    part.text for part in response.candidates[0].content.parts
-                    if part.text and not getattr(part, "thought", False)
-                ).strip()
+        models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
 
-                logger.info("Ответ от Gemini: %s", generated_answer)
+        # Перебор моделей
+        for model_name in models_to_try:
+            keys_to_try = key_manager.get_keys_to_try()
+            for key in keys_to_try:
+                try:
+                    client = genai.Client(api_key=key)
+                    response = await client.aio.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=1.4,
+                            top_p=0.95,
+                            top_k=25,
+                            tools=[google_search_tool],
+                            safety_settings=safety_settings
+                        )
+                    )
 
-                escaped_answer = escape(generated_answer)
-                truncated_answer = escaped_answer[:4060]
-                html_answer = f"<blockquote expandable>{truncated_answer}</blockquote>"
+                    if response.candidates and response.candidates[0].content.parts:
+                        generated_answer = "".join(
+                            part.text for part in response.candidates[0].content.parts
+                            if part.text and not getattr(part, "thought", False)
+                        ).strip()
 
-                sent_message = await update.message.reply_text(html_answer, parse_mode=ParseMode.HTML)
+                        if generated_answer:
+                            logger.info("Успешный ответ от модели %s с ключом %s", model_name, key)
+                            await key_manager.set_successful_key(key)
 
-                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-            else:
-                logger.warning("Gemini не вернул ответ на запрос.")
-                await update.message.reply_text("Извините, я не смог придумать характеристики.")
-        except Exception as e:
-            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-            await update.message.reply_text("Ошибка при обработке запроса. Попробуй снова.")
+                            escaped_answer = escape(generated_answer)
+                            truncated_answer = escaped_answer[:4060]
+                            html_answer = f"<blockquote expandable>{truncated_answer}</blockquote>"
+
+                            sent_message = await update.message.reply_text(html_answer, parse_mode=ParseMode.HTML)
+                            bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+                            return
+                        else:
+                            logger.warning("Модель %s не вернула текста", model_name)
+                except Exception as e:
+                    logger.warning("Ошибка с моделью %s и ключом %s: %s", model_name, key, e)
+                    continue  # Пробуем следующий ключ
+
+        # Если дошли сюда — ничего не сработало
+        logger.error("Не удалось получить ответ ни с одной модели и ключа")
+        await update.message.reply_text("Извини, ни один ключ и ни одна модель не смогли сработать. Попробуй позже.")
 
     asyncio.create_task(background_rpg())
 
@@ -4580,49 +4680,72 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_message = await update.message.reply_text("🔍 Ищу информацию...")
 
     async def background_search():
-        try:
-            google_search_tool = Tool(
-                google_search=GoogleSearch()
-            )
-            response = await client.aio.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=1.4,
-                    top_p=0.95,
-                    top_k=25,
-                    tools=[google_search_tool],
-                    safety_settings=[
-                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
-                    ]
-                )
-            )
+        google_search_tool = Tool(
+            google_search=GoogleSearch()
+        )
 
-            logger.info(f"response: {response}")
+        async def try_with_keys_and_model(model_name: str) -> str | None:
+            """
+            Пробует выполнить запрос, перебирая ключи для одной модели.
+            Возвращает ответ или None, если все ключи не сработали.
+            """
+            for key in key_manager.get_keys_to_try():
+                try:
+                    temp_client = genai.Client(api_key=key)
+                    response = await temp_client.aio.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=1.4,
+                            top_p=0.95,
+                            top_k=25,
+                            tools=[google_search_tool],
+                            safety_settings=[
+                                types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+                            ]
+                        )
+                    )
 
-            if response.candidates and response.candidates[0].content.parts:
-                generated_answer = "".join(
-                    part.text for part in response.candidates[0].content.parts
-                    if part.text and not getattr(part, "thought", False)
-                ).strip()
+                    logger.info(f"response from {model_name} with {key[:10]}...: {response}")
 
-                escaped_answer = escape(generated_answer)  # твоя функция экранирования HTML
-                html_response = f"<blockquote expandable>{escaped_answer}</blockquote>"
+                    if response.candidates and response.candidates[0].content.parts:
+                        await key_manager.set_successful_key(key)  # запоминаем удачный ключ
+                        generated_answer = "".join(
+                            part.text for part in response.candidates[0].content.parts
+                            if part.text and not getattr(part, "thought", False)
+                        ).strip()
+                        return generated_answer
+                except Exception as e:
+                    logger.warning(f"Ошибка при запросе с ключом {key[:10]}... и моделью {model_name}: {e}")
+            return None
 
-                sent_message = await update.message.reply_text(
-                    html_response[:4096], parse_mode=ParseMode.HTML
-                )
+        # 1. Пробуем основную модель
+        result = await try_with_keys_and_model(PRIMARY_MODEL)
 
-                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-            else:
-                logger.warning("Gemini не вернул ответ.")
-                await update.message.reply_text("Извините, я не могу ответить на этот запрос.")
-        except Exception as e:
-            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-            await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
+        # 2. Если не получилось — пробуем запасные модели
+        if not result:
+            for fallback_model in FALLBACK_MODELS:
+                result = await try_with_keys_and_model(fallback_model)
+                if result:
+                    break
+
+        # 3. Если всё равно пусто — сообщаем пользователю
+        if not result:
+            await update.message.reply_text("К сожалению, не удалось обработать запрос ни с одной моделью.")
+            return
+
+        # Форматируем и отправляем ответ
+        escaped_answer = escape(result)  # твоя функция экранирования HTML
+        html_response = f"<blockquote expandable>{escaped_answer}</blockquote>"
+
+        sent_message = await update.message.reply_text(
+            html_response[:4096], parse_mode=ParseMode.HTML
+        )
+
+        bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
 
     asyncio.create_task(background_search())
 
@@ -4641,54 +4764,99 @@ async def pro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = f"Текущий запрос: {user_message}\n\n"
     logger.info("Промпт для Gemini: %s", prompt)
 
-    # Запрос в модель
-    try:
-        google_search_tool = Tool(
-            google_search=GoogleSearch()
-        )        
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=1.4,
-                top_p=0.95,
-                top_k=25,
-                max_output_tokens=8000,
-                tools=[google_search_tool],                
-                safety_settings=[
-                    types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                    types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                    types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                    types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                ]
-            )
-        )    
-        logger.info(f"response: {response}")         
+    google_search_tool = Tool(
+        google_search=GoogleSearch()
+    )
 
-        if response.candidates and response.candidates[0].content.parts:
-            generated_answer = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if part.text and not getattr(part, "thought", False)
-            ).strip()
-            logger.info("Ответ от Gemini: %s", generated_answer)
-
-            # Обработка через MarkdownV2 + деление на части
-            parts = await send_reply_with_limit(generated_answer)
-
-            for part in parts:
-                sent_message = await update.message.reply_text(
-                    part,
-                    parse_mode=ParseMode.MARKDOWN_V2
+    # Сначала пробуем все ключи с основной моделью
+    keys_to_try = key_manager.get_keys_to_try()
+    for key in keys_to_try:
+        try:
+            client = genai.Client(api_key=key)
+            response = await client.aio.models.generate_content(
+                model=PRIMARY_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    max_output_tokens=8000,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]
                 )
-                if chat_id not in bot_message_ids:
-                    bot_message_ids[chat_id] = []
-                bot_message_ids[chat_id].append(sent_message.message_id)
-        else:
-            logger.warning("Gemini не вернул ответ на запрос.")
-            await update.message.reply_text("Извините, я не могу ответить на этот запрос.")
-    except Exception as e:
-        logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-        await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
+            )
+            if response.candidates and response.candidates[0].content.parts:
+                await key_manager.set_successful_key(key)
+                generated_answer = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+                logger.info("Ответ от Gemini: %s", generated_answer)
+
+                parts = await send_reply_with_limit(generated_answer)
+                for part in parts:
+                    sent_message = await update.message.reply_text(
+                        part,
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+                    if chat_id not in bot_message_ids:
+                        bot_message_ids[chat_id] = []
+                    bot_message_ids[chat_id].append(sent_message.message_id)
+                return
+        except Exception as e:
+            logger.warning("Ошибка с ключом %s и моделью %s: %s", key, PRIMARY_MODEL, e)
+
+    # Если все ключи не сработали с основной моделью — пробуем запасные модели
+    for model in FALLBACK_MODELS:
+        for key in keys_to_try:
+            try:
+                client = genai.Client(api_key=key)
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=1.4,
+                        top_p=0.95,
+                        top_k=25,
+                        max_output_tokens=8000,
+                        tools=[google_search_tool],
+                        safety_settings=[
+                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                        ]
+                    )
+                )
+                if response.candidates and response.candidates[0].content.parts:
+                    await key_manager.set_successful_key(key)
+                    generated_answer = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text and not getattr(part, "thought", False)
+                    ).strip()
+                    logger.info("Ответ от Gemini (fallback %s): %s", model, generated_answer)
+
+                    parts = await send_reply_with_limit(generated_answer)
+                    for part in parts:
+                        sent_message = await update.message.reply_text(
+                            part,
+                            parse_mode=ParseMode.MARKDOWN_V2
+                        )
+                        if chat_id not in bot_message_ids:
+                            bot_message_ids[chat_id] = []
+                        bot_message_ids[chat_id].append(sent_message.message_id)
+                    return
+            except Exception as e:
+                logger.warning("Ошибка с ключом %s и fallback-моделью %s: %s", key, model, e)
+
+    # Если вообще ничего не сработало
+    await update.message.reply_text("К сожалению, не удалось обработать запрос ни с одним ключом и моделью. Попробуйте позже.")
+
 
 
 
@@ -4717,7 +4885,7 @@ async def question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Не используй квадратные скобки в своём ответе\n"
         f"Контекст беседы:\n{chat_context}\n\n"
         f"Текущий запрос: {user_message}\n\n"
-        f"Ответь на этот запрос как профессиональная языковая модель. Придерживайся запроса и роли которая тебе даётся в нём, если она есть. А так же прочих требований, дай ответ в контексте беседы"
+        f"Ответь на этот запрос как профессиональная языковая модель. Придерживайся запроса и роли которая тебе даётся в нём, если она есть. А так же прочих требований, дай ответ в контексте беседы."
         f" Ответ должен быть логичным, соответствовать контексту текущей беседы."
     )
 
@@ -4727,49 +4895,68 @@ async def question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_message = await update.message.reply_text("⏳ Думаю...")
 
     async def background_question():
+        nonlocal prompt, chat_id
+        google_search_tool = Tool(google_search=GoogleSearch())
+
+        success = False
+
+        # Перебор моделей только если все ключи не дали результата
+        models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+
+        for model in models_to_try:
+            if success:
+                break
+
+            keys_to_try = key_manager.get_keys_to_try()
+            for key in keys_to_try:
+                try:
+                    client = genai.Client(api_key=key)
+
+                    response = await client.aio.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=1.4,
+                            top_p=0.95,
+                            top_k=25,
+                            max_output_tokens=1000,
+                            tools=[google_search_tool],
+                            safety_settings=[
+                                types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                            ]
+                        )
+                    )
+
+                    if response.candidates and response.candidates[0].content.parts:
+                        generated_answer = "".join(
+                            part.text for part in response.candidates[0].content.parts
+                            if part.text and not getattr(part, "thought", False)
+                        ).strip()
+
+                        sent_message = await update.message.reply_text(generated_answer[:4096])
+                        bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+
+                        await key_manager.set_successful_key(key)
+                        success = True
+                        break
+                    else:
+                        logger.warning("Gemini не вернул ответ на запрос (модель %s, ключ %s).", model, key)
+
+                except Exception as e:
+                    logger.error("Ошибка при генерации (модель %s, ключ %s): %s", model, key, e)
+                    continue  # Пробуем следующий ключ
+
+        if not success:
+            await update.message.reply_text("Извините, не удалось получить ответ — все ключи и модели дали ошибку.")
+
+        # Удаляем сообщение ожидания
         try:
-            google_search_tool = Tool(
-                google_search=GoogleSearch()
-            )
-            response = await client.aio.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=1.4,
-                    top_p=0.95,
-                    top_k=25,
-                    max_output_tokens=1000,
-                    tools=[google_search_tool],
-                    safety_settings=[
-                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                    ]
-                )
-            )
-
-            if response.candidates and response.candidates[0].content.parts:
-                generated_answer = "".join(
-                    part.text for part in response.candidates[0].content.parts
-                    if part.text and not getattr(part, "thought", False)
-                ).strip()
-
-                sent_message = await update.message.reply_text(generated_answer[:4096])
-
-                bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-            else:
-                logger.warning("Gemini не вернул ответ на запрос.")
-                await update.message.reply_text("Извините, я не могу ответить на этот запрос.")
+            await waiting_message.delete()
         except Exception as e:
-            logger.error("Ошибка при генерации ответа от Gemini: %s", e)
-            await update.message.reply_text("Ошибка при обработке запроса. Попробуйте снова.")
-        finally:
-            # Удаляем сообщение ожидания
-            try:
-                await waiting_message.delete()
-            except Exception as e:
-                logger.warning(f"Не удалось удалить сообщение ожидания: {e}")
+            logger.warning(f"Не удалось удалить сообщение ожидания: {e}")
 
     asyncio.create_task(background_question())
 
@@ -8111,6 +8298,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
