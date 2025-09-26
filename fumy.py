@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import textwrap
 import time
+import html
 from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from html import escape
@@ -1637,7 +1638,15 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer()
 
-    action_data = query.data  # например, "simplify|bcd123"
+    action_data = query.data
+
+    # ✅ Проверяем специальные кнопки и перенаправляем в нужные функции
+    if action_data.startswith("more_keys_"):
+        return await more_keys(update, context)
+    elif action_data == "download_file":
+        return await download_file(update, context)
+    elif action_data == "vpninstruction_show":
+        return await send_instruction(update, context)
     try:
         action, result_id = action_data.split("|", 1)
     except ValueError:
@@ -8489,6 +8498,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
