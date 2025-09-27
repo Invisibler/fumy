@@ -1407,90 +1407,104 @@ async def generate_gemini_response(query, chat_context, chat_id):
 
     system_instruction = system_instruction[0]  # только это отправляется в Gemini    
     logger.info(f"system_instruction: {system_instruction}")     
-    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
-    keys_to_try = key_manager.get_keys_to_try()  
-    for model_name in models_to_try:
-        for api_key in keys_to_try:
-            try:
-                logger.info(f"Попытка: модель='{model_name}', ключ=...{api_key[-4:]}")
+    # --- 1. Перебираем ключи только на PRIMARY_MODEL ---
+    keys_to_try = key_manager.get_keys_to_try()
+    for api_key in keys_to_try:
+        try:
+            logger.info(f"Попытка: модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
+            client = genai.Client(api_key=api_key)
 
-                # Создаём клиент с текущим ключом
-                client = genai.Client(api_key=api_key)
+            google_search_tool = Tool(google_search=GoogleSearch())
 
-                # Инструменты
-                google_search_tool = Tool(
-                    google_search=GoogleSearch()
+            response = await client.aio.models.generate_content(
+                model=PRIMARY_MODEL,
+                contents=context,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    max_output_tokens=7000,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+                    ]
                 )
+            )
 
-                # Запрос к API
-                response = await client.aio.models.generate_content(
-                    model=model_name,
-                    contents=context,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        temperature=1.4,
-                        top_p=0.95,
-                        top_k=25,
-                        max_output_tokens=7000,
-                        tools=[google_search_tool],
-                        safety_settings=[
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_HATE_SPEECH',
-                                threshold='BLOCK_NONE'
-                            ),
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_HARASSMENT',
-                                threshold='BLOCK_NONE'
-                            ),
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                                threshold='BLOCK_NONE'
-                            ),
-                            types.SafetySetting(
-                                category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                                threshold='BLOCK_NONE'
-                            )
-                        ]
-                    )
-                )
+            logger.info("Содержимое response: %s", response)
 
-                logger.info("Содержимое response: %s", response)
+            if response.candidates and response.candidates[0].content.parts:
+                bot_response = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
 
-                if response.candidates and response.candidates[0].content.parts:
-                    bot_response = "".join(
-                        part.text for part in response.candidates[0].content.parts
-                        if part.text and not getattr(part, "thought", False)
-                    ).strip()
-
-                    logger.info(f"Успех! Модель='{model_name}', ключ=...{api_key[-4:]}")
-                    await key_manager.set_successful_key(api_key)  # Запоминаем удачный ключ
-                    return bot_response
-                else:
-                    logger.warning(f"Неудача: Gemini вернул пустой ответ. Модель='{model_name}', ключ=...{api_key[-4:]}")
-                    
-                    if hasattr(response, '__dict__'):
-                        logger.info("Содержимое response: %s", response.__dict__)
-                    else:
-                        logger.info("response не содержит атрибута __dict__. Тип объекта: %s", type(response))
-
-                    return "Извините, я не могу ответить на этот запрос."
-
-
-            except Exception as e:
-                # Ловим любую ошибку (например, невалидный ключ, проблемы с доступом и т.д.)
-                logger.error(f"Неудача: Ошибка при запросе к Gemini. Модель='{model_name}', ключ=...{api_key[-4:]}. Ошибка: {e}")
-                # Переходим к следующему ключу
+                logger.info(f"Успех! Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
+                await key_manager.set_successful_key(api_key)  # Запоминаем удачный ключ
+                return bot_response
+            else:
+                logger.warning(f"Gemini вернул пустой ответ. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
                 continue
-        
-        # Если все ключи для текущей модели не сработали, логгируем это
-        logger.warning(f"Все ключи не сработали для модели: {model_name}. Перехожу к следующей модели.")
 
-    # Если ни один ключ и ни одна модель не сработали
+        except Exception as e:
+            logger.error(f"Ошибка при запросе к Gemini. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}. Ошибка: {e}")
+            continue
+
+    # --- 2. Если все ключи упали — берём последний и пробуем FALLBACK_MODELS ---
+    logger.warning("Все ключи упали на основной модели. Пробую fallback-модели.")
+    fallback_key = keys_to_try[-1]  # используем последний
+
+    for model_name in FALLBACK_MODELS:
+        try:
+            logger.info(f"Попытка: модель='{model_name}', ключ=...{fallback_key[-4:]}")
+            client = genai.Client(api_key=fallback_key)
+
+            google_search_tool = Tool(google_search=GoogleSearch())
+
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=context,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    max_output_tokens=7000,
+                    tools=[google_search_tool],
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+                    ]
+                )
+            )
+
+            logger.info("Содержимое response: %s", response)
+
+            if response.candidates and response.candidates[0].content.parts:
+                bot_response = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+
+                logger.info(f"Успех! Fallback-модель='{model_name}', ключ=...{fallback_key[-4:]}")
+                return bot_response
+            else:
+                logger.warning(f"Fallback-модель вернула пустой ответ. Модель='{model_name}'")
+                continue
+
+        except Exception as e:
+            logger.error(f"Ошибка при запросе к Gemini. Fallback-модель='{model_name}', ключ=...{fallback_key[-4:]}. Ошибка: {e}")
+            continue
+
+    # --- 3. Если и это не сработало ---
     logger.error("Полный провал: ни один API ключ и ни одна модель не сработали.")
     return "Извините, сервис временно недоступен. Попробуйте повторить запрос позже."
-
-
-
 
 
 
@@ -1747,84 +1761,118 @@ async def delete_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def generate_audio_response(audio_file_path: str, command_text: str, context="") -> str:
     """
     Обрабатывает путь к аудиофайлу и команду, генерируя ответ с помощью Gemini.
-
-    :param audio_file_path: путь к аудиофайлу.
-    :param command_text: текст команды для обработки аудио.
-    :return: ответ от Gemini.
+    Перебирает ключи, пока не найдёт рабочий.
+    Если все ключи дают ошибку, пробует модели, но только на последнем ключе.
     """
 
-    # 2. Подготовка к перебору
-    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
-    keys_to_try = key_manager.get_keys_to_try()
     audio_path = pathlib.Path(audio_file_path)
+    keys_to_try = key_manager.get_keys_to_try()
 
-    # 3. Двойной цикл перебора
-    for model_name in models_to_try:
-        for api_key in keys_to_try:
-            try:
-                logger.info(f"Попытка обработки аудио: модель='{model_name}', ключ=...{api_key[-4:]}")
+    # --- 1. Сначала пробуем только PRIMARY_MODEL и перебираем ключи ---
+    for api_key in keys_to_try:
+        try:
+            logger.info(f"Попытка обработки аудио: модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
 
-                # Создаем клиент для текущего ключа
-                client = genai.Client(api_key=api_key)
+            client = genai.Client(api_key=api_key)
 
-                # Загружаем файл. Эта операция тоже зависит от ключа.
-                # Примечание: client.files.upload - синхронная операция.
-                file_upload = client.files.upload(file=audio_path)
-                logger.info(f"Файл {audio_path.name} успешно загружен, URI: {file_upload.uri}")
+            file_upload = client.files.upload(file=audio_path)
+            logger.info(f"Файл {audio_path.name} успешно загружен, URI: {file_upload.uri}")
 
-                # Формируем контент для запроса
-                contents = [
-                    Part.from_uri(
-                        file_uri=file_upload.uri,
-                        mime_type=file_upload.mime_type
-                    ),
-                    command_text
-                ]
+            contents = [
+                Part.from_uri(
+                    file_uri=file_upload.uri,
+                    mime_type=file_upload.mime_type
+                ),
+                command_text
+            ]
 
-                # Делаем запрос на генерацию контента
-                response = await client.aio.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    generation_config=GenerationConfig(
-                        temperature=1.4,
-                        top_p=0.95,
-                        top_k=25,
-                        safety_settings=[
-                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                        ]                      
-                    )
+            response = await client.aio.models.generate_content(
+                model=PRIMARY_MODEL,
+                contents=contents,
+                generation_config=GenerationConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]
                 )
+            )
 
-                if response.candidates and response.candidates[0].content.parts:
-                    bot_response = "".join(
-                        part.text for part in response.candidates[0].content.parts
-                        if part.text
-                    ).strip()
-                    
-                    logger.info(f"Успех! Аудио обработано. Модель='{model_name}', ключ=...{api_key[-4:]}")
-                    await key_manager.set_successful_key(api_key)
-                    
-                    # Не забываем удалить загруженный файл с серверов Google после использования
-                    client.files.delete(name=file_upload.name)
-                    logger.info(f"Временный файл {file_upload.name} удален.")
-                    
-                    return bot_response
-                else:
-                    logger.warning(f"Неудача: Gemini вернул пустой ответ для аудио. Модель='{model_name}', ключ=...{api_key[-4:]}")
+            if response.candidates and response.candidates[0].content.parts:
+                bot_response = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text
+                ).strip()
 
-            except Exception as e:
-                logger.error(f"Неудача: Ошибка при обработке аудио. Модель='{model_name}', ключ=...{api_key[-4:]}. Ошибка: {e}")
-                # Переходим к следующему ключу
-                continue
-        
-        logger.warning(f"Все ключи не сработали для модели: {model_name}. Перехожу к следующей.")
+                logger.info(f"Успех! Аудио обработано. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
+                await key_manager.set_successful_key(api_key)
 
-    # 4. Если все попытки провалились
-    logger.error("Полный провал: ни один API ключ и ни одна модель не сработали для обработки аудио.")
+                client.files.delete(name=file_upload.name)
+                logger.info(f"Временный файл {file_upload.name} удален.")
+
+                return bot_response
+            else:
+                logger.warning(f"Gemini вернул пустой ответ. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке аудио. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}. Ошибка: {e}")
+            continue
+
+    # --- 2. Если все ключи не сработали, пробуем модели на последнем ключе ---
+    last_key = keys_to_try[-1]
+    for model_name in [PRIMARY_MODEL] + FALLBACK_MODELS:
+        try:
+            logger.info(f"Попытка обработки аудио: модель='{model_name}', последний ключ=...{last_key[-4:]}")
+
+            client = genai.Client(api_key=last_key)
+            file_upload = client.files.upload(file=audio_path)
+
+            contents = [
+                Part.from_uri(
+                    file_uri=file_upload.uri,
+                    mime_type=file_upload.mime_type
+                ),
+                command_text
+            ]
+
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=contents,
+                generation_config=GenerationConfig(
+                    temperature=1.4,
+                    top_p=0.95,
+                    top_k=25,
+                    safety_settings=[
+                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                    ]
+                )
+            )
+
+            if response.candidates and response.candidates[0].content.parts:
+                bot_response = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text
+                ).strip()
+
+                logger.info(f"Успех! Аудио обработано. Модель='{model_name}', ключ=...{last_key[-4:]}")
+                client.files.delete(name=file_upload.name)
+                return bot_response
+            else:
+                logger.warning(f"Gemini вернул пустой ответ. Модель='{model_name}', ключ=...{last_key[-4:]}")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке аудио. Модель='{model_name}', ключ=...{last_key[-4:]}. Ошибка: {e}")
+            continue
+
+    # --- 3. Полный провал ---
+    logger.error("Полный провал: ни один ключ и ни одна модель не сработали.")
     return "Ошибка при обработке аудиофайла. Сервис временно недоступен."
+
 
 
 
@@ -1844,12 +1892,10 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
         if not command_text:
             command_text = "Опишите содержание видео или распознайте текст, если он есть."
 
-        # Проверяем существование файла
         if not os.path.exists(video_file_path):
             logger.error(f"Файл {video_file_path} не существует.")
             return "Видео недоступно. Попробуйте снова."
 
-        # Загрузка файла
         video_path = pathlib.Path(video_file_path)
         logger.info(f"Uploading video file: {video_path}")
         try:
@@ -1858,7 +1904,6 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
             logger.error(f"Ошибка при загрузке файла: {e}")
             return "Не удалось загрузить видео. Попробуйте снова."
 
-        # Ожидание обработки видео
         while video_file.state == "PROCESSING":
             logger.info("Waiting for video to be processed...")
             await asyncio.sleep(10)
@@ -1870,7 +1915,6 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
 
         logger.info(f"Video processing complete: {video_file.uri}")
 
-        # Настройки безопасности
         safety_settings = [
             types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
             types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
@@ -1878,64 +1922,89 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
             types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
         ]
 
-        # Перебор моделей
-        models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
-        for model in models_to_try:
-            logger.info(f"Пробуем модель: {model}")
-            # Перебор ключей
-            for key in key_manager.get_keys_to_try():
-                try:
-                    local_client = genai.Client(api_key=key)
-                    response = await local_client.aio.models.generate_content(
-                        model=model,
-                        contents=[
-                            types.Content(
-                                role="user",
-                                parts=[
-                                    types.Part.from_uri(
-                                        file_uri=video_file.uri,
-                                        mime_type=video_file.mime_type
-                                    )
-                                ]
-                            ),
-                            command_text
-                        ],
-                        config=types.GenerateContentConfig(
-                            temperature=1.2,
-                            top_p=0.9,
-                            top_k=40,
-                            safety_settings=safety_settings
-                        )
+        # --- 1. Перебираем ключи только с основной моделью ---
+        keys_to_try = key_manager.get_keys_to_try()
+        last_key = keys_to_try[-1]  # запомним последний для fallback моделей
+        for key in keys_to_try:
+            try:
+                local_client = genai.Client(api_key=key)
+                response = await local_client.aio.models.generate_content(
+                    model=PRIMARY_MODEL,
+                    contents=[
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_uri(file_uri=video_file.uri, mime_type=video_file.mime_type)]
+                        ),
+                        command_text
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=1.2,
+                        top_p=0.9,
+                        top_k=40,
+                        safety_settings=safety_settings
                     )
+                )
 
-                    # Проверка результата
-                    if not response.candidates or not response.candidates[0].content.parts:
-                        logger.warning(f"Пустой ответ от модели {model} с ключом {key}")
-                        continue
+                if not response.candidates or not response.candidates[0].content.parts:
+                    logger.warning(f"Пустой ответ от модели {PRIMARY_MODEL} с ключом {key}")
+                    continue
 
-                    # Извлечение текста
-                    bot_response = "".join(
-                        part.text for part in response.candidates[0].content.parts
-                        if part.text and not getattr(part, "thought", False)
-                    ).strip()
+                bot_response = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
 
-                    # Сохраняем удачный ключ
-                    await key_manager.set_successful_key(key)
-                    return bot_response
+                await key_manager.set_successful_key(key)
+                return bot_response
 
-                except Exception as e:
-                    logger.warning(f"Ошибка при запросе (модель={model}, ключ={key}): {e}")
-                    continue  # Пробуем следующий ключ
+            except Exception as e:
+                logger.warning(f"Ошибка при запросе (ключ={key}, модель={PRIMARY_MODEL}): {e}")
+                continue
 
-        # Если дошли сюда — все ключи и модели не сработали
-        logger.error("Все ключи и модели исчерпаны.")
+        # --- 2. Если все ключи провалились → пробуем fallback модели на последнем ключе ---
+        logger.info("Все ключи с основной моделью провалились. Пробуем fallback модели...")
+        for model in FALLBACK_MODELS:
+            try:
+                local_client = genai.Client(api_key=last_key)
+                response = await local_client.aio.models.generate_content(
+                    model=model,
+                    contents=[
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_uri(file_uri=video_file.uri, mime_type=video_file.mime_type)]
+                        ),
+                        command_text
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=1.2,
+                        top_p=0.9,
+                        top_k=40,
+                        safety_settings=safety_settings
+                    )
+                )
+
+                if not response.candidates or not response.candidates[0].content.parts:
+                    logger.warning(f"Пустой ответ от модели {model} с ключом {last_key}")
+                    continue
+
+                bot_response = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+
+                return bot_response
+
+            except Exception as e:
+                logger.warning(f"Ошибка при запросе (ключ={last_key}, модель={model}): {e}")
+                continue
+
+        logger.error("Все ключи и fallback модели исчерпаны.")
         return "Извините, не удалось обработать видео. Все доступные ключи и модели исчерпаны."
 
     except FileNotFoundError as fnf_error:
         logger.error(f"Файл не найден: {fnf_error}")
         return "Видео не найдено. Проверьте путь к файлу."
-
-    except Exception as e:
+    except Exception:
         logger.error("Ошибка при обработке видео с Gemini:", exc_info=True)
         return "Ошибка при обработке видео. Попробуйте снова."
 
@@ -3393,7 +3462,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/dice</code> — кинуть кубик
 <code>/rpg</code> — узнать свои характеристики
 <code>/role</code> — выбрать роль для бота
-<code>/fd</code> — удалить сообщение бота к которому обращена эта команда
+<code>/fd</code> — удалить сообщение бота к которому обращена команда
 
 <b>Команды с текстом после них:</b>
 <code>/sim</code> — симулировать участника чата или персонажа
@@ -3473,24 +3542,66 @@ async def recognize_image_with_gemini(image_file_path: str, prompt="", context="
         types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
     ]
 
-    # Сначала пробуем основную модель, затем запасные
-    models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
+    # --- 1. Пробуем все ключи с основной моделью ---
+    keys_to_try = key_manager.get_keys_to_try()
+    for key in keys_to_try:
+        try:
+            client = genai.Client(api_key=key)
+            image_file = client.files.upload(file=image_path)
+            logger.info(f"Image uploaded: {image_file.uri}")
 
-    for model in models_to_try:
-        logger.info(f"Пробуем модель: {model}")
-        keys_to_try = key_manager.get_keys_to_try()
+            response = await client.aio.models.generate_content(
+                model=PRIMARY_MODEL,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_uri(
+                                file_uri=image_file.uri,
+                                mime_type=image_file.mime_type
+                            ),
+                            types.Part(text=instructions),
+                        ]
+                    )
+                ],
+                config=types.GenerateContentConfig(
+                    temperature=1.0,
+                    top_p=0.9,
+                    top_k=40,
+                    response_modalities=["text"],
+                    safety_settings=safety_settings,
+                ),
+            )
 
-        for key in keys_to_try:
+            if response.candidates and response.candidates[0].content.parts:
+                recognized_text = "".join(
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text and not getattr(part, "thought", False)
+                ).strip()
+                logger.info("Распознанный текст от Gemini: %s", recognized_text)
+
+                # Запоминаем удачный ключ
+                await key_manager.set_successful_key(key)
+
+                return recognized_text
+            else:
+                logger.warning(f"Основная модель {PRIMARY_MODEL} не вернула ответ с ключом {key}.")
+                continue
+
+        except Exception as e:
+            logger.error(f"Ошибка с ключом {key} и основной моделью {PRIMARY_MODEL}: {e}")
+            continue
+
+    # --- 2. Если все ключи провалились — пробуем fallback-модели только на последнем ключе ---
+    fallback_key = keys_to_try[-1]
+    try:
+        client = genai.Client(api_key=fallback_key)
+        image_file = client.files.upload(file=image_path)
+        logger.info(f"Image uploaded for fallback: {image_file.uri}")
+
+        for model in FALLBACK_MODELS:
             try:
-                client = genai.Client(api_key=key)
-                try:
-                    image_file = client.files.upload(file=image_path)
-                except Exception as e:
-                    logger.error(f"Ошибка при загрузке изображения: {e}")
-                    return "Не удалось загрузить изображение."
-
-                logger.info(f"Image uploaded: {image_file.uri}")
-
+                logger.info(f"Пробуем fallback модель {model} на ключе {fallback_key}")
                 response = await client.aio.models.generate_content(
                     model=model,
                     contents=[
@@ -3519,24 +3630,21 @@ async def recognize_image_with_gemini(image_file_path: str, prompt="", context="
                         part.text for part in response.candidates[0].content.parts
                         if part.text and not getattr(part, "thought", False)
                     ).strip()
-                    logger.info("Распознанный текст от Gemini: %s", recognized_text)
-
-                    # Запоминаем удачный ключ
-                    await key_manager.set_successful_key(key)
-
+                    logger.info("Распознанный текст от Gemini (fallback): %s", recognized_text)
                     return recognized_text
                 else:
-                    logger.warning(f"Модель {model} не вернула ответ для изображения.")
-                    # пробуем следующий ключ
+                    logger.warning(f"Fallback модель {model} не вернула ответ.")
                     continue
 
             except Exception as e:
-                logger.error(f"Ошибка с ключом {key} и моделью {model}: {e}")
+                logger.error(f"Ошибка с ключом {fallback_key} и моделью {model}: {e}")
                 continue
 
-    # Если ни один ключ и ни одна модель не подошли
-    return "Извините, не удалось обработать изображение ни с одной моделью и ключом."
+    except Exception as e:
+        logger.error(f"Не удалось загрузить изображение для fallback: {e}")
 
+    # --- 3. Совсем ничего не сработало ---
+    return "Извините, не удалось обработать изображение ни с одной моделью и ключом."
 
 
 
@@ -4878,13 +4986,13 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = f"Текущий запрос: {user_message}\n\n"
     logger.info("Промпт для Gemini: %s", prompt)
 
-    # Отправляем "ожидание" и запоминаем это сообщение
     waiting_message = await update.message.reply_text("🔍 Ищу информацию...")
 
     async def background_search():
         google_search_tool = Tool(google_search=GoogleSearch())
 
-        async def try_with_keys_and_model(model_name: str) -> str | None:
+        async def try_with_model_and_keys(model_name: str) -> str | None:
+            """Перебираем ключи только для одной модели"""
             for key in key_manager.get_keys_to_try():
                 try:
                     temp_client = genai.Client(api_key=key)
@@ -4918,26 +5026,54 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Ошибка при запросе с ключом {key[:10]}... и моделью {model_name}: {e}")
             return None
 
-        # 1. Пробуем основную модель
-        result = await try_with_keys_and_model(PRIMARY_MODEL)
+        # 1. Пробуем основную модель на всех ключах
+        result = await try_with_model_and_keys(PRIMARY_MODEL)
 
-        # 2. Если не получилось — пробуем запасные
+        # 2. Если все ключи дали ошибку — пробуем fallback-модели,
+        #    но уже ТОЛЬКО на одном ключе (например, последнем)
         if not result:
+            fallback_key = key_manager.api_keys[-1]
+            temp_client = genai.Client(api_key=fallback_key)
+
             for fallback_model in FALLBACK_MODELS:
-                result = await try_with_keys_and_model(fallback_model)
-                if result:
-                    break
+                try:
+                    response = await temp_client.aio.models.generate_content(
+                        model=fallback_model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=1.4,
+                            top_p=0.95,
+                            top_k=25,
+                            tools=[google_search_tool],
+                            safety_settings=[
+                                types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                                types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+                            ]
+                        )
+                    )
+                    logger.info(f"response from {fallback_model} with {fallback_key[:10]}...: {response}")
 
-        # 3. Если пусто — редактируем сообщение с ошибкой
+                    if response.candidates and response.candidates[0].content.parts:
+                        generated_answer = "".join(
+                            part.text for part in response.candidates[0].content.parts
+                            if part.text and not getattr(part, "thought", False)
+                        ).strip()
+                        result = generated_answer
+                        break
+                except Exception as e:
+                    logger.warning(f"Ошибка на fallback модели {fallback_model}: {e}")
+
+        # 3. Если и тут пусто — ошибка
         if not result:
-            await waiting_message.edit_text("К сожалению, не удалось обработать запрос ни с одной моделью.")
+            await waiting_message.edit_text("К сожалению, не удалось обработать запрос ни с одним ключом и моделью.")
             return
 
         # Форматируем ответ
         escaped_answer = escape(result)
         html_response = f"<blockquote expandable>{escaped_answer}</blockquote>"
 
-        # Редактируем исходное сообщение вместо отправки нового
         await waiting_message.edit_text(
             html_response[:4096], parse_mode=ParseMode.HTML
         )
@@ -4945,6 +5081,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_message_ids.setdefault(chat_id, []).append(waiting_message.message_id)
 
     asyncio.create_task(background_search())
+
 
 
 
@@ -8498,6 +8635,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
