@@ -1896,6 +1896,10 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
             logger.error(f"Файл {video_file_path} не существует.")
             return "Видео недоступно. Попробуйте снова."
 
+        # --- Определяем client сразу, чтобы избежать ошибки ---
+        first_key = key_manager.get_first_key()
+        client = genai.Client(api_key=first_key)
+
         video_path = pathlib.Path(video_file_path)
         logger.info(f"Uploading video file: {video_path}")
         try:
@@ -8635,6 +8639,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
