@@ -1897,8 +1897,10 @@ async def generate_video_response(video_file_path: str, command_text: str, conte
             return "Видео недоступно. Попробуйте снова."
 
         # --- Определяем client сразу, чтобы избежать ошибки ---
-        first_key = key_manager.get_first_key()
+        keys_to_try = key_manager.get_keys_to_try()
+        first_key = keys_to_try[0]  # берем первый доступный ключ
         client = genai.Client(api_key=first_key)
+
 
         video_path = pathlib.Path(video_file_path)
         logger.info(f"Uploading video file: {video_path}")
@@ -3477,7 +3479,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/iq</code> — распределение IQ по шкале разумизма
 <code>/today</code> — узнать вероятность события в процентах
 <code>/todayall</code> — узнать вероятность для всех участников чата
-<code>/event</code> — прогноз успешности события для всех
+<code>/event</code> — прогноз успешности события
 
 <b>Пример:</b>
 <code>/sim Альберт Эйнштейн</code>  
@@ -8639,6 +8641,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
