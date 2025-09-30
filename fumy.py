@@ -64,7 +64,7 @@ API_KEYS = [
     "AIzaSyBO-BSI0varRQW35mNwJr87hUv-jhQvxiw",  # Ваш старый ключ
     "AIzaSyANeoDLkH9KAjNlumpV1PGpNyIpjpgdjL4",
     "AIzaSyDPsMGw8-CD4yK1FtGEKiq5X8jgcXVZxos",
-    "AIzaSyBcsrPrBIO2GRj88SiY-dSJ5Y40E0ep-5I"
+    "AIzaSyBi5oSEwsvp7MhKVWkH8pOC-tiRHXAddmQ"
 ]
 
 # 2. Укажите основную и запасные модели
@@ -8641,6 +8641,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
