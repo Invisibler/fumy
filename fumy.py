@@ -3477,7 +3477,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/time</code> — узнать, когда произошло/произойдёт событие
 <code>/image</code> — сгенерировать изображение
 <code>/iq</code> — распределение IQ по шкале разумизма
-<code>/today</code> — узнать вероятность события в процентах
+<code>/today</code> — узнать вероятность события
 <code>/todayall</code> — узнать вероятность для всех участников чата
 <code>/event</code> — прогноз успешности события
 
@@ -8641,6 +8641,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
