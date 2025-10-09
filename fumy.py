@@ -4293,38 +4293,43 @@ async def handle_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def download_chat_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
-    chat_history = chat_histories.get(chat_id, [])
 
-    # Генерация текстового представления chat_history с временем для каждой записи
-    chat_text = []
-    for msg in chat_history:
-        if isinstance(msg, dict) and 'role' in msg and 'reply_to' in msg and 'message' in msg:
-            timestamp = msg.get('timestamp', 'N/A')
-            reply_to = msg['reply_to'] if msg['reply_to'] else 'всем'
-            action = 'ответил' if msg['reply_to'] else 'сказал'
-            chat_text.append(f"[{timestamp}] {msg['role']} {action} {reply_to}: [{msg['message']}]")
-        else:
-            chat_text.append(f"Неверный формат сообщения: {msg}")
+    # ✅ Загружаем историю чата напрямую из Firebase
+    ref = db.reference(f'chat_histories/{chat_id}')
+    chat_history = ref.get() or []
 
-    if not chat_text:
+    # Проверяем, есть ли вообще сообщения
+    if not chat_history:
         sent_message = await update.message.reply_text("История чата пуста.")
         bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
         return
 
-    # Сохранение текста в файл
-    file_path = "chat_history.txt"
+    # ✅ Генерируем читаемый текст истории
+    chat_text = []
+    for msg in chat_history:
+        if isinstance(msg, dict) and 'role' in msg and 'message' in msg:
+            timestamp = msg.get('timestamp', 'N/A')
+            reply_to = msg.get('reply_to', None)
+            reply_to_display = reply_to if reply_to else 'всем'
+            action = 'ответил' if reply_to else 'сказал'
+            chat_text.append(f"[{timestamp}] {msg['role']} {action} {reply_to_display}: [{msg['message']}]")
+        else:
+            chat_text.append(f"Неверный формат сообщения: {msg}")
+
+    # ✅ Сохраняем историю во временный файл
+    file_path = f"chat_history_{chat_id}.txt"
     with open(file_path, "w", encoding="utf-8") as file:
         file.write("\n".join(chat_text))
 
-    # Отправка файла пользователю
-    sent_message = await update.message.reply_text("Вот ваша история чата:")
+    # ✅ Отправляем пользователю текст и файл
+    sent_message = await update.message.reply_text("Вот история вашего чата:")
     bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-    
+
     with open(file_path, "rb") as file:
         document_message = await context.bot.send_document(chat_id=update.effective_chat.id, document=file)
-        bot_message_ids[chat_id].append(document_message.message_id)  # Сохраняем ID отправленного документа
+        bot_message_ids[chat_id].append(document_message.message_id)
 
-    # Удаление файла после отправки (по желанию)
+    # ✅ Удаляем файл после отправки
     os.remove(file_path)
 
 async def download_relevant_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8641,6 +8646,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
