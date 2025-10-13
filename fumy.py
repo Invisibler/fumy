@@ -1404,7 +1404,14 @@ async def generate_gemini_response(query, chat_context, chat_id):
         f"Текущий запрос:\n{query}\n\n"     
         f"Продолжи диалог как живой собеседник. Избегай фраз вроде Бот ответил...,избегай квадратных скобок или указания времени, они нужны только в истории"
     )
-
+  
+    if int(chat_id) == -1003096587539:
+        context += (
+            "\n\nВажно: ты находишься в ролевом чате. "
+            "В этом чате ты — жена пользователя с ником @gajinov. "
+            "Отвечай с учётом этого контекста: веди себя как его игровая супруга."
+        )
+      
     system_instruction = system_instruction[0]  # только это отправляется в Gemini    
     logger.info(f"system_instruction: {system_instruction}")     
     # --- 1. Перебираем ключи только на PRIMARY_MODEL ---
@@ -8646,6 +8653,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
