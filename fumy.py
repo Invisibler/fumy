@@ -1002,7 +1002,7 @@ async def send_reply_with_limit_v2(text, max_length=4096):
 
 async def Generate_gemini_image(prompt: str):
     context = f"{prompt}"
-    model_name = "gemini-2.5-flash-image"
+    model_name = "gemini-2.0-flash-exp-image-generation"
 
     # Получаем ключи для перебора (сначала последний удачный, если он был)
     keys_to_try = key_manager.get_keys_to_try()
@@ -8653,6 +8653,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
