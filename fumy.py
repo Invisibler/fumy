@@ -1002,7 +1002,7 @@ async def send_reply_with_limit_v2(text, max_length=4096):
 
 async def Generate_gemini_image(prompt: str):
     context = f"{prompt}"
-    model_name = "gemini-2.0-flash-exp-image-generation"
+    model_name = "gemini-2.5-flash-image"
 
     # Получаем ключи для перебора (сначала последний удачный, если он был)
     keys_to_try = key_manager.get_keys_to_try()
@@ -3481,7 +3481,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/sim</code> — симулировать участника чата или персонажа
 <code>/q</code> — задать вопрос игнорируя роль
 <code>/search</code> — задать вопрос игнорируя роль и контекст чата
-<code>/time</code> — узнать, когда произошло/произойдёт событие
+<code>/time</code> — узнать когда произошло/произойдёт событие
 <code>/image</code> — сгенерировать изображение
 <code>/iq</code> — распределение IQ по шкале разумизма
 <code>/today</code> — узнать вероятность события
@@ -8653,6 +8653,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
