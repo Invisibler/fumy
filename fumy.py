@@ -4993,6 +4993,7 @@ async def time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_message = " ".join(context.args)
@@ -5010,7 +5011,6 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         google_search_tool = Tool(google_search=GoogleSearch())
 
         async def try_with_model_and_keys(model_name: str) -> str | None:
-            """Перебираем ключи только для одной модели"""
             for key in key_manager.get_keys_to_try():
                 try:
                     temp_client = genai.Client(api_key=key)
@@ -5044,11 +5044,8 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Ошибка при запросе с ключом {key[:10]}... и моделью {model_name}: {e}")
             return None
 
-        # 1. Пробуем основную модель на всех ключах
         result = await try_with_model_and_keys(PRIMARY_MODEL)
 
-        # 2. Если все ключи дали ошибку — пробуем fallback-модели,
-        #    но уже ТОЛЬКО на одном ключе (например, последнем)
         if not result:
             fallback_key = key_manager.api_keys[-1]
             temp_client = genai.Client(api_key=fallback_key)
@@ -5083,18 +5080,25 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.warning(f"Ошибка на fallback модели {fallback_model}: {e}")
 
-        # 3. Если и тут пусто — ошибка
         if not result:
             await waiting_message.edit_text("К сожалению, не удалось обработать запрос ни с одним ключом и моделью.")
             return
 
-        # Форматируем ответ
+        # 🔹 Экранируем HTML
         escaped_answer = escape(result)
-        html_response = f"<blockquote expandable>{escaped_answer}</blockquote>"
 
-        await waiting_message.edit_text(
-            html_response[:4096], parse_mode=ParseMode.HTML
-        )
+        # 🔹 Разбиваем на части (по 4000 символов для запаса)
+        chunks = [escaped_answer[i:i + 4000] for i in range(0, len(escaped_answer), 4000)]
+
+        # 🔹 Отправляем каждую часть в отдельном блоке
+        first = True
+        for chunk in chunks:
+            html_response = f"<blockquote expandable>{chunk}</blockquote>"
+            if first:
+                await waiting_message.edit_text(html_response, parse_mode=ParseMode.HTML)
+                first = False
+            else:
+                await update.message.reply_text(html_response, parse_mode=ParseMode.HTML)
 
         bot_message_ids.setdefault(chat_id, []).append(waiting_message.message_id)
 
@@ -8653,6 +8657,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
