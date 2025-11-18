@@ -1,4 +1,4 @@
-# Стандартная библиотека
+
 import asyncio
 import calendar
 import glob
@@ -8617,6 +8617,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
