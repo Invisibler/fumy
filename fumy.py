@@ -3470,7 +3470,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/dr</code> — скачать релевантную историю
 <code>/fr</code> — очистить историю чата
 <code>/fgr</code> — очистить историю чата игровых ролей 
-<code>/sum</code> — пересказать историю чата за последний день
+<code>/sum</code> — пересказать историю чата за последнее время
 <code>/mental</code> — психическое состояние участников чата
 <code>/dice</code> — кинуть кубик
 <code>/rpg</code> — узнать свои характеристики
@@ -5110,13 +5110,12 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
-    user_message = " ".join(context.args)  # Объединить аргументы команды
+    user_message = " ".join(context.args)
 
     if not user_message:
         await update.message.reply_text("Пожалуйста, укажите вопрос после команды /pro.")
         return
 
-    # Сформировать промпт
     prompt = f"Текущий запрос: {user_message}\n\n"
     logger.info("Промпт для Gemini: %s", prompt)
 
@@ -5124,13 +5123,16 @@ async def pro(update: Update, context: ContextTypes.DEFAULT_TYPE):
         google_search=GoogleSearch()
     )
 
-    # Сначала пробуем все ключи с основной моделью
+    MODEL_NAME = "gemini-3-pro-preview"
+
     keys_to_try = key_manager.get_keys_to_try()
+
     for key in keys_to_try:
         try:
             client = genai.Client(api_key=key)
+
             response = await client.aio.models.generate_content(
-                model=PRIMARY_MODEL,
+                model=MODEL_NAME,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=1.4,
@@ -5146,13 +5148,16 @@ async def pro(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]
                 )
             )
+
             if response.candidates and response.candidates[0].content.parts:
                 await key_manager.set_successful_key(key)
+
                 generated_answer = "".join(
                     part.text for part in response.candidates[0].content.parts
                     if part.text and not getattr(part, "thought", False)
                 ).strip()
-                logger.info("Ответ от Gemini: %s", generated_answer)
+
+                logger.info("Ответ от Gemini (%s): %s", MODEL_NAME, generated_answer)
 
                 parts = await send_reply_with_limit(generated_answer)
                 for part in parts:
@@ -5160,59 +5165,14 @@ async def pro(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         part,
                         parse_mode=ParseMode.MARKDOWN_V2
                     )
-                    if chat_id not in bot_message_ids:
-                        bot_message_ids[chat_id] = []
-                    bot_message_ids[chat_id].append(sent_message.message_id)
+                    bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+
                 return
+
         except Exception as e:
-            logger.warning("Ошибка с ключом %s и моделью %s: %s", key, PRIMARY_MODEL, e)
+            logger.warning("Ошибка с ключом %s и моделью %s: %s", key, MODEL_NAME, e)
 
-    # Если все ключи не сработали с основной моделью — пробуем запасные модели
-    for model in FALLBACK_MODELS:
-        for key in keys_to_try:
-            try:
-                client = genai.Client(api_key=key)
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=1.4,
-                        top_p=0.95,
-                        top_k=25,
-                        max_output_tokens=8000,
-                        tools=[google_search_tool],
-                        safety_settings=[
-                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                        ]
-                    )
-                )
-                if response.candidates and response.candidates[0].content.parts:
-                    await key_manager.set_successful_key(key)
-                    generated_answer = "".join(
-                        part.text for part in response.candidates[0].content.parts
-                        if part.text and not getattr(part, "thought", False)
-                    ).strip()
-                    logger.info("Ответ от Gemini (fallback %s): %s", model, generated_answer)
-
-                    parts = await send_reply_with_limit(generated_answer)
-                    for part in parts:
-                        sent_message = await update.message.reply_text(
-                            part,
-                            parse_mode=ParseMode.MARKDOWN_V2
-                        )
-                        if chat_id not in bot_message_ids:
-                            bot_message_ids[chat_id] = []
-                        bot_message_ids[chat_id].append(sent_message.message_id)
-                    return
-            except Exception as e:
-                logger.warning("Ошибка с ключом %s и fallback-моделью %s: %s", key, model, e)
-
-    # Если вообще ничего не сработало
-    await update.message.reply_text("К сожалению, не удалось обработать запрос ни с одним ключом и моделью. Попробуйте позже.")
-
+    await update.message.reply_text("К сожалению, не удалось обработать запрос ни с одним ключом. Попробуйте позже.")
 
 
 
@@ -8657,6 +8617,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
