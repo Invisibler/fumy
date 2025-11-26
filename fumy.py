@@ -2332,6 +2332,77 @@ async def translate_promt_with_gemini(prompt):
     return "Ошибка: все ключи и модели недоступны. Попробуйте позже."
 
 
+async def ai_or_not(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_file):
+    api_user = '1334786424'
+    api_secret = 'HaC88eFy4NLhyo86Md9aTKkkKaQyZeEU'
+
+    # Загружаем файл Telegram
+    file = await context.bot.get_file(photo_file.file_id)
+
+    fd, image_path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+
+    try:
+        await file.download_to_drive(image_path)
+
+        params = {
+            'models': 'genai',
+            'api_user': api_user,
+            'api_secret': api_secret
+        }
+
+        # ⬇️ Отправляем сообщение о начале проверки и сохраняем его
+        checking_msg = await update.message.reply_text("Проверяю изображение на признаки ИИ... 🔍")
+
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(5):
+                with open(image_path, "rb") as f:
+                    form = aiohttp.FormData()
+                    form.add_field("media", f, filename="image.jpg", content_type="image/jpeg")
+                    for k, v in params.items():
+                        form.add_field(k, v)
+
+                    async with session.post("https://api.sightengine.com/1.0/check.json", data=form) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            ai_generated_score = result['type']['ai_generated']
+
+                            keyboard = [
+                                [InlineKeyboardButton("Sightengine", url="https://sightengine.com/detect-ai-generated-images")],
+                                [InlineKeyboardButton("Illuminarty AI", url="https://app.illuminarty.ai/#/")]
+                            ]
+                            reply_markup = InlineKeyboardMarkup(keyboard)
+
+                            # ⬇️ Редактируем предыдущее сообщение вместо отправки нового
+                            await checking_msg.edit_text(
+                                f"Вероятность, что изображение создано ИИ: **{ai_generated_score * 100:.2f}%**",
+                                reply_markup=reply_markup,
+                                parse_mode="Markdown"
+                            )
+                            return
+
+                        elif response.status == 429:
+                            await asyncio.sleep(5)
+                        else:
+                            txt = await response.text()
+
+                            # Ошибку тоже выводим через edit_text
+                            await checking_msg.edit_text(
+                                f"Ошибка API Sightengine: {response.status}\n{txt}"
+                            )
+                            return
+
+        await checking_msg.edit_text("Не удалось обработать изображение после нескольких попыток.")
+
+    finally:
+        try:
+            os.remove(image_path)
+        except:
+            pass
+
+
+
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_time = update.message.date.astimezone(utc_plus_3)  # Преобразование времени в UTC+3
@@ -2370,6 +2441,35 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Инициализируем историю, если её нет
     history_dict.setdefault(chat_id, [])
     logger.info("Обработка сообщения в чате %s", chat_id)
+    match_ai_check = re.match(
+        r"\s*фуми[, ]*(?:это)?[, ]*(?:нейросеть|нейронка)\??\s*$",
+        user_message,
+        re.IGNORECASE
+    )
+
+    if match_ai_check:
+        # Проверяем последнее фото (как при докдоработках)
+        last_photo = None
+
+        # Если сообщение — ответ на фото
+        if update.message.reply_to_message and update.message.reply_to_message.photo:
+            last_photo = update.message.reply_to_message.photo[-1]
+
+        # Или ищем предыдущее фото контекстно (как у тебя в других функциях)
+        elif relevant_messages:
+            for msg in reversed(relevant_messages):
+                if msg.photo:
+                    last_photo = msg.photo[-1]
+                    break
+
+        if not last_photo:
+            await update.message.reply_text("Пришли фотографию или ответь этой фразой на фото 🔍")
+            return
+
+        await ai_or_not(update, context, last_photo)
+        return
+
+
     match_fulldraw = re.match(
         r"\s*фуми,?\s*(нарисуй|дорисуй|доделай|переделай)[^\S\r\n]*:?[\s,]*(.*)",
         user_message,
@@ -3485,7 +3585,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/image</code> — сгенерировать изображение
 <code>/iq</code> — распределение IQ по шкале разумизма
 <code>/today</code> — узнать вероятность события
-<code>/todayall</code> — узнать вероятность для всех участников чата
+<code>/todayall</code> — узнать вероятность для всех участников
 <code>/event</code> — прогноз успешности события
 
 <b>Пример:</b>
@@ -3801,6 +3901,31 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Проверка на дорисовку
             match = re.match(r"\s*фуми,?\s*(дорисуй|доделай|переделай)[^\S\r\n]*:?[\s,]*(.*)", caption, re.IGNORECASE)
+
+
+            # Проверка "фуми, нейронка?" / "фуми это нейросеть?" и т.п.
+            neuronka_match = re.match(
+                r"\s*фуми[\s,.:;!?-]*\s*(это\s*)?(нейронка|нейросеть|ai|искусственный интеллект)\s*\??\s*$",
+                caption,
+                re.IGNORECASE
+            )
+
+            if neuronka_match:
+                logger.info("Обнаружен запрос: проверка изображения на ИИ")
+
+                # Удаляем сообщение "Обрабатываю изображение..."
+                try:
+                    await waiting_message.delete()
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить waiting_message: {e}")
+
+                try:
+                    await ai_or_not(update, context, photo)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове ai_or_not: {e}")
+                    await update.message.reply_text("⚠️ Не удалось проверить изображение на ИИ.")
+
+                return
             if match:
                 instructions = match.group(1) + " " + match.group(2).strip()
                 if not instructions:
@@ -4058,7 +4183,7 @@ async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TY
     user_tasks_set = context.user_data.setdefault('user_tasks', set())
     user_tasks_set.add(task)
     task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-
+    return
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -8617,6 +8742,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
