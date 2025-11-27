@@ -2400,6 +2400,8 @@ async def ai_or_not(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_fi
         except:
             pass
 
+import requests
+import urllib.parse
 
 
 async def find_anime_source(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_file):
@@ -8938,6 +8940,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
