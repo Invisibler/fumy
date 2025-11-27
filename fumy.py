@@ -2402,6 +2402,175 @@ async def ai_or_not(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_fi
 
 
 
+async def find_anime_source(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_file):
+    temp_msg = await update.message.reply_text("Ищу источник…")
+    image_path = None
+
+    try:
+        # Получаем файл
+        file = await context.bot.get_file(photo_file.file_id)
+
+        fd, image_path = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+
+        await file.download_to_drive(image_path)
+
+        # --- Запрос на trace.moe /search ---
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                "https://api.trace.moe/search?anilistInfo&cutBorders",
+                data=f,
+                headers={"Content-Type": "image/jpeg"}
+            )
+        data = resp.json()
+
+        if "result" not in data or not data["result"]:
+            await temp_msg.delete()
+            await update.message.reply_text(
+                "Извините, ничего не нашлось. Если у кадра есть чёрные полосы — попробуйте их обрезать."
+            )
+            return
+
+        result = data["result"][0]
+        logger.info(f"trace.moe result: {result}")
+
+        # similarity
+        similarity = result.get("similarity", 0) * 100
+        if similarity < 86:
+            await temp_msg.delete()
+            await update.message.reply_text(
+                "Извините, ничего не нашлось. Если у кадра есть чёрные полосы — попробуйте их обрезать."
+            )
+            return
+
+        anilist = result.get("anilist", {})
+
+        # Название
+        title = (
+            anilist.get("title", {}).get("english")
+            or anilist.get("title", {}).get("romaji")
+            or anilist.get("title", {}).get("native")
+        )
+
+        # Жанры
+        genres = anilist.get("genres")
+        genres_str = ", ".join(genres) if genres else None
+
+        # Формат
+        fmt = anilist.get("format")
+
+        # Студия
+        studios = anilist.get("studios", {}).get("edges", [])
+        main_studios = [s["node"]["name"] for s in studios if s.get("isMain")]
+        studio_str = ", ".join(main_studios) if main_studios else None
+
+        # Годы
+        start = anilist.get("startDate")
+        end = anilist.get("endDate")
+
+        years_str = None
+        if start and start.get("year"):
+            if end and end.get("year") and end.get("year") != start.get("year"):
+                years_str = f"{start['year']}–{end['year']}"
+            else:
+                years_str = str(start["year"])
+
+        # Варианты
+        synonyms = anilist.get("synonyms", [])
+        synonyms_str = ", ".join(synonyms) if synonyms else None
+
+        # Эпизод
+        episode = result.get("episode")
+        total_episodes = anilist.get("episodes")
+
+        # Время
+        def fmt_time(t):
+            minutes = int(t // 60)
+            seconds = int(t % 60)
+            return f"{minutes:02d}:{seconds:02d}"
+
+        t_from = result.get("from")
+        t_to = result.get("to")
+        time_str = (
+            f"{fmt_time(t_from)} — {fmt_time(t_to)}"
+            if (t_from is not None and t_to is not None)
+            else None
+        )
+
+        # Видео
+        video_url = result.get("video")
+        if video_url:
+            video_url += "?size=l"
+
+        # --- Запрос trace.moe /me ---
+        me = requests.get("https://api.trace.moe/me").json()
+
+        quota = int(me.get("quota", 0))
+        used = int(me.get("quotaUsed", 0))
+        left = quota - used
+
+        # --- Формирование HTML-ответа ---
+        def c(x):
+            return f"<code>{html.escape(str(x))}</code>" if x else None
+
+        lines = []
+
+        if title:           lines.append(f"Название: {c(title)}")
+        if genres_str:      lines.append(f"Жанр: {c(genres_str)}")
+        if fmt:             lines.append(f"Формат: {c(fmt)}")
+        if studio_str:      lines.append(f"Студия: {c(studio_str)}")
+        if years_str:       lines.append(f"Годы выхода: {c(years_str)}")
+        if synonyms_str:    lines.append(f"Варианты: {c(synonyms_str)}")
+
+        if episode:
+            ep_line = f"Эпизод: {c(episode)}"
+            if total_episodes:
+                ep_line += f" (Всего эпизодов: {c(total_episodes)})"
+            lines.append(ep_line)
+
+        if time_str:        lines.append(f"Отрезок: {c(time_str)}")
+        lines.append(f"Точность: {c(f'{similarity:.2f}%')}")
+
+        # Новая строка — оставшиеся запросы:
+        lines.append(f"\nОсталось запросов в этом месяце: {c(left)}")
+
+        caption = "\n".join(lines)
+
+        # Отправка итогового ответа
+        await temp_msg.delete()
+
+        if video_url:
+            await context.bot.send_video(
+                chat_id=update.message.chat_id,
+                video=video_url,
+                caption=caption,
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(caption, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"trace.moe error: {e}")
+
+        try: 
+            await temp_msg.delete()
+        except:
+            pass
+
+        await update.message.reply_text("Произошла ошибка при поиске источника 😿")
+
+    finally:
+        if image_path and os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+            except:
+                pass
+
+
+
+
+
+
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2441,6 +2610,33 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Инициализируем историю, если её нет
     history_dict.setdefault(chat_id, [])
     logger.info("Обработка сообщения в чате %s", chat_id)
+
+    match_trace = re.match(
+        r"\s*фуми[, ]*(?:откуда\s*кадр|что\s*за\s*аниме|источник|название|как\s*называется\s*(?:это\s*)?аниме)\s*[?.!]*\s*$",
+        user_message,
+        re.IGNORECASE
+    )
+
+    if match_trace:
+        # Ищем фото: либо в ответе, либо в контексте сообщений
+        last_photo = None
+
+        if update.message.reply_to_message and update.message.reply_to_message.photo:
+            last_photo = update.message.reply_to_message.photo[-1]
+
+        elif relevant_messages:
+            for msg in reversed(relevant_messages):
+                if msg.photo:
+                    last_photo = msg.photo[-1]
+                    break
+
+        if not last_photo:
+            await update.message.reply_text("Пришли фотографию или ответь этой фразой на фото 📷")
+            return
+
+        await find_anime_source(update, context, last_photo)
+        return
+
     match_ai_check = re.match(
         r"\s*фуми[, ]*(?:это)?[, ]*(?:нейросеть|нейронка)\??\s*$",
         user_message,
@@ -8742,6 +8938,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
