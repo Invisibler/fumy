@@ -61,10 +61,10 @@ import random
 # Telegram Bot Token и Google API Key
 TELEGRAM_BOT_TOKEN = "7027286115:AAFTS-mK2ajoXB4wTuvS0NmiHi2R2TDBrIo"
 API_KEYS = [
-    "AIzaSyBO-BSI0varRQW35mNwJr87hUv-jhQvxiw",  # Ваш старый ключ
-    "AIzaSyANeoDLkH9KAjNlumpV1PGpNyIpjpgdjL4",
-    "AIzaSyDPsMGw8-CD4yK1FtGEKiq5X8jgcXVZxos",
-    "AIzaSyBi5oSEwsvp7MhKVWkH8pOC-tiRHXAddmQ"
+    "AIzaSyCdiJ7XXuVBxtp28IoootGlvmuKLwseKvU",  # Ваш старый ключ
+    "AIzaSyBvSYNOUXogET-JFLfbXzVfRDOV-ApIgig",
+    "AIzaSyCGJ4AO--uFd0uR9zCqLHPyok56tgcsFrQ",
+    "AIzaSyBaWiNRg1xDIgju9dPCV75EtYd95YGnH5M"
 ]
 
 # 2. Укажите основную и запасные модели
@@ -8742,6 +8742,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
