@@ -8866,7 +8866,10 @@ async def handle_statall_command(update, context):
 
 
 
-
+async def rand(update, context):
+    number = random.randint(0, 5674)  # генерируем число
+    url = f"https://t.me/anemonn/{number}"
+    await update.message.reply_text(url)
 
 
 
@@ -8879,6 +8882,7 @@ def main():
     application.add_handler(CallbackQueryHandler(send_instruction, pattern="^vpninstruction_show$"))
     application.add_handler(CallbackQueryHandler(button_callback_handler))   
     # Обработчики команд
+    application.add_handler(CommandHandler("rand", rand))
     application.add_handler(CommandHandler('test', test))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("dh", download_chat_history))
@@ -8935,6 +8939,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
