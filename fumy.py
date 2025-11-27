@@ -60,12 +60,7 @@ import random
 
 # Telegram Bot Token и Google API Key
 TELEGRAM_BOT_TOKEN = "7027286115:AAFTS-mK2ajoXB4wTuvS0NmiHi2R2TDBrIo"
-API_KEYS = [
-    "AIzaSyCdiJ7XXuVBxtp28IoootGlvmuKLwseKvU",  # Ваш старый ключ
-    "AIzaSyBvSYNOUXogET-JFLfbXzVfRDOV-ApIgig",
-    "AIzaSyCGJ4AO--uFd0uR9zCqLHPyok56tgcsFrQ",
-    "AIzaSyBaWiNRg1xDIgju9dPCV75EtYd95YGnH5M"
-]
+API_KEYS = os.getenv("API_KEYS", "").split(",")
 
 # 2. Укажите основную и запасные модели
 PRIMARY_MODEL = 'gemini-2.5-flash' # Модель, которую пробуем в первую очередь
@@ -8940,6 +8935,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
