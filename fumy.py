@@ -8865,11 +8865,31 @@ async def handle_statall_command(update, context):
         await update.message.reply_text(f"Не удалось сгенерировать общую статистику для этого чата. Возможно, нет данных или произошла ошибка.")
 
 
+# список возможных фраз
+RANDOM_TEXTS = [
+    "похоже сегодня наилучшим местом для тебя будет:",
+    "вот что предначертано тебе судьбой:",
+    "сегодня ты выглядишь прямо как:",
+    "не знаю зачем тебе это, но держи:",
+    "звёзды говорят, что сегодня тебя как нельзя лучше описывает:",
+    "это именно то что сегодня тебе столь нужно:",  
+    "судя по всему идеальным миром для тебя было бы нечто такое:"    
+]
 
-async def rand(update, context):
-    number = random.randint(0, 5674)  # генерируем число
+
+async def rand(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    number = random.randint(0, 5674)
     url = f"https://t.me/anemonn/{number}"
-    await update.message.reply_text(url)
+
+    # проверяем — используется ли команда как reply
+    if update.message.reply_to_message:
+        # имя пользователя, на чьё сообщение сделали реплай
+        username = update.message.reply_to_message.from_user.first_name or "Человек"
+        random_text = random.choice(RANDOM_TEXTS)
+
+        await update.message.reply_text(f"{username}, {random_text}\n{url}")
+    else:
+        await update.message.reply_text(url)
 
 
 
@@ -8939,6 +8959,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
