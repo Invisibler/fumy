@@ -2574,7 +2574,7 @@ ALLOWED_TAGS = {
     "b", "strong", "i", "u", "s", "strike", "del",
     "a", "code", "pre", "tg-spoiler", "blockquote"
 }
-
+import uuid
 def clean_and_parse_html(text: str, max_len: int = TELEGRAM_MAX) -> List[str]:
     # 0. Нормализация переносов
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -2583,7 +2583,8 @@ def clean_and_parse_html(text: str, max_len: int = TELEGRAM_MAX) -> List[str]:
     
     def protect(content):
         # Используем уникальный токен, который точно не встретится в тексте
-        token = f"__PROTECTED_BLOCK_{len(protected_blocks)}__"
+        token = f"PRT_{uuid.uuid4().hex}"
+        
         protected_blocks[token] = content
         return token
 
@@ -2669,6 +2670,23 @@ def clean_and_parse_html(text: str, max_len: int = TELEGRAM_MAX) -> List[str]:
     # --- ШАГ 7: Возвращаем защищенные блоки ---
     for token, content in protected_blocks.items():
         text = text.replace(token, content)
+
+    # --- ШАГ 7.5: ФИНАЛЬНАЯ ЗАЧИСТКА ТЕГОВ ---
+    # Удаляем любые HTML-подобные конструкции, которые не входят в белый список.
+    # Это страхует от "мусора", который мог проскочить через Markdown или инъекции атрибутов.
+    
+    def _final_sanitize(match):
+        full_tag = match.group(0)
+        tag_name = match.group(1).lower()
+        # Если тег в списке разрешенных — оставляем его как есть
+        if tag_name in ALLOWED_TAGS:
+            return full_tag
+        # Если тег запрещен — удаляем его (заменяем на пустую строку),
+        # но текст внутри тега останется (так как регулярка ловит только сам тег <...>)
+        return ""
+
+    # Используем ту же регулярку для поиска тегов
+    text = tag_regex.sub(_final_sanitize, text)
 
     # --- ШАГ 8: Умная разбивка ---
     return split_html_text(text, max_len)
@@ -9187,6 +9205,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
