@@ -3969,7 +3969,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/dh</code> — скачать историю чата
 <code>/dr</code> — скачать релевантную историю
 <code>/fr</code> — очистить историю этого чата
-<code>/fgr</code> — очистить историю чата игровых ролей 
+<code>/fgr</code> — очистить историю игровых ролей 
 <code>/sum</code> — пересказать историю чата за последнее время
 <code>/mental</code> — психическое состояние участников чата
 <code>/dice</code> — кинуть кубик
@@ -9205,6 +9205,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
