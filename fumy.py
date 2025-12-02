@@ -2567,197 +2567,166 @@ async def find_anime_source(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 
 
+# Константы
 TELEGRAM_MAX = 4096
+# Поддерживаемые теги (Telegram HTML)
 ALLOWED_TAGS = {
-    "b", "strong", "i", "u", "s",
-    "a", "code", "pre", "tg-spoiler",
-    "blockquote"  # Добавлен для цитат
+    "b", "strong", "i", "u", "s", "strike", "del",
+    "a", "code", "pre", "tg-spoiler", "blockquote"
 }
 
-# Вспомогательная: создаёт закрывающий тег по открытому (строка вида '<a href="...">')
-def make_closing_tag(opening_tag: str) -> str:
-    m = re.match(r"<\s*([a-zA-Z0-9-]+)", opening_tag)
-    if not m:
-        return ""
-    return f"</{m.group(1)}>"
+def clean_and_parse_html(text: str, max_len: int = TELEGRAM_MAX) -> List[str]:
+    # 0. Нормализация переносов
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-# Парсинг и преобразование
-def mdv2_to_html_messages(response_text: str, max_len: int = TELEGRAM_MAX) -> List[str]:
-    text = response_text.replace("\r\n", "\n").replace("\r", "\n")
-
-    # 1) Извлечь ```pre``` блоки (многострочные) и inline `code` в плейсхолдеры
-    code_blocks: List[Tuple[str, bool]] = []  # (content, is_pre)
-    def _store_code_block(match):
-        content = match.group(1)
-        idx = len(code_blocks)
-        code_blocks.append((content, True))
-        return f"\x00__CODEBLOCK_{idx}__\x00"
-
-    text = re.sub(r"```(?:[^\n]*\n)?(.*?)```", _store_code_block, text, flags=re.DOTALL)
-
-    def _store_inline_code(match):
-        content = match.group(1)
-        idx = len(code_blocks)
-        code_blocks.append((content, False))
-        return f"\x00__CODEBLOCK_{idx}__\x00"
-
-    # inline code: `code`
-    text = re.sub(r"`([^`\n]+?)`", _store_inline_code, text)
-
-    # 2) Обработать блоки цитат: группы строк начинающихся с '>'
-    lines = text.split("\n")
-    out_lines = []
-    i = 0
-    while i < len(lines):
-        if lines[i].lstrip().startswith(">"):
-            # собираем группу
-            group = []
-            while i < len(lines) and lines[i].lstrip().startswith(">"):
-                # удаляем первый '>' и один пробел после него, если есть
-                raw = lines[i].lstrip()[1:]
-                if raw.startswith(" "):
-                    raw = raw[1:]
-                group.append(raw)
-                i += 1
-            # !!! ИСПРАВЛЕНИЕ: объединяем строки цитаты через \n и оборачиваем в <blockquote expandable>..</blockquote>
-            joined = "\n".join(html.escape(line) for line in group)
-            out_lines.append(f"<blockquote expandable>{joined}</blockquote>")
-        else:
-            out_lines.append(lines[i])
-            i += 1
-    text = "\n".join(out_lines)
-
-    # 3) Ссылки [text](url) — заменяем только корректно парные
-    def _link_repl(match):
-        label = html.escape(match.group(1))
-        url = match.group(2).strip()
-        url = html.escape(url, quote=True)
-        return f'<a href="{url}">{label}</a>'
-
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link_repl, text)
-
-    # 4) Последовательно заменяем парные маркеры:
-    # порядок: ** (жирный), __ (подч), || (спойлер), * (курсив)
+    protected_blocks = {}
     
-    # Обрабатываем **:
-    text = re.sub(r"\*\*([^*]+?)\*\*", lambda m: f"<b>{html.escape(m.group(1))}</b>", text, flags=re.DOTALL)
-
-    # __ underline
-    text = re.sub(r"__([^_]+?)__", lambda m: f"<u>{html.escape(m.group(1))}</u>", text, flags=re.DOTALL)
-
-    # || spoiler
-    text = re.sub(r"\|\|([^|]+?)\|\|", lambda m: f"<tg-spoiler>{html.escape(m.group(1))}</tg-spoiler>", text, flags=re.DOTALL)
-
-    # single * italic (avoid matching ** which уже заменили)
-    text = re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", lambda m: f"<i>{html.escape(m.group(1))}</i>", text, flags=re.DOTALL)
-
-    # 5) Вернуть code & pre-плейсхолдеры
-    def _restore_code_placeholder(match):
-        idx = int(match.group(1))
-        content, is_pre = code_blocks[idx]
-        escaped = html.escape(content)
-        if is_pre:
-            return f"<pre>{escaped}</pre>"
-        else:
-            return f"<code>{escaped}</code>"
-
-    text = re.sub(r"\x00__CODEBLOCK_(\d+)__\x00", _restore_code_placeholder, text)
-
-    # 6) Экранируем оставшиеся неподдерживаемые HTML-теги:
-    allowed_placeholder_map = {}
-    def _allow_tag_repl(m):
-        token = f"\x02ALLOWED_{len(allowed_placeholder_map)}\x02"
-        allowed_placeholder_map[token] = m.group(0)
+    def protect(content):
+        # Используем уникальный токен, который точно не встретится в тексте
+        token = f"__PROTECTED_BLOCK_{len(protected_blocks)}__"
+        protected_blocks[token] = content
         return token
 
-    # Заменяем допустимые теги (открывающие/закрывающие) на плейсхолдеры
-    # распознаём теги вроде <b>, </b>, <a href="...">, <tg-spoiler>, <pre>, <code>, <blockquote>
-    text = re.sub(r"<\s*(\/?\s*[a-zA-Z0-9-]+)(?:\s+[^>]*)?>", lambda m: _allow_tag_repl(m) if re.match(r"\/?\s*([a-zA-Z0-9-]+)", m.group(1)) and re.match(r"[a-zA-Z0-9-]+", re.match(r"\/?\s*([a-zA-Z0-9-]+)", m.group(1)).group(1)) and re.match(re.compile(rf"^(?:{'|'.join(re.escape(t) for t in ALLOWED_TAGS)})$", re.IGNORECASE), re.match(r"\/?\s*([a-zA-Z0-9-]+)", m.group(1)).group(1)) else m.group(0), text)
+    # --- ШАГ 1: Защищаем блоки кода (PRE) ---
+    # Многострочный код ``` ... ```
+    def _repl_pre(match):
+        lang = match.group(1) or ""
+        content = match.group(2)
+        return protect(f'<pre><code class="language-{lang}">{html.escape(content)}</code></pre>')
 
-    # Теперь всё, что осталось в виде '<' '>' — экранируем
-    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    # Флаг DOTALL обязателен, чтобы захватывать переносы строк внутри кода
+    text = re.sub(r"```([a-zA-Z0-9+\-]*)?\n?(.*?)```", _repl_pre, text, flags=re.DOTALL)
 
-    # Восстанавливаем допустимые теги из плейсхолдеров
-    for token, original in allowed_placeholder_map.items():
-        text = text.replace(token, original)
+    # --- ШАГ 2: Защищаем инлайн-код (CODE) ---
+    # !!! ВАЖНОЕ ИСПРАВЛЕНИЕ: [^\n`]+ вместо [^`]+
+    # Это запрещает коду захватывать текст через несколько строк (защита от каомодзи)
+    def _repl_code(match):
+        content = match.group(1)
+        # Если внутри попался каомодзи или что-то странное, просто экранируем
+        return protect(f"<code>{html.escape(content)}</code>")
 
-    # 7) Нормализуем: не заменяем \n на <br>, т.к. Telegram использует \n для переноса строки
-    # (Оригинальная логика заменена на "ничего не делать")
-    pass
+    text = re.sub(r"`([^\n`]+)`", _repl_code, text)
+
+    # --- ШАГ 3: Защищаем существующие валидные HTML теги ---
+    # Чтобы нейросеть могла сама писать <b>жирный</b>
+    def _repl_existing_html(match):
+        full_tag = match.group(0)
+        tag_name = match.group(1).lower()
+        if tag_name in ALLOWED_TAGS:
+            return protect(full_tag)
+        return full_tag # Не трогаем, экранируется на следующем шаге
+
+    tag_regex = re.compile(r"<\/?([a-zA-Z0-9]+)(?:\s+[^>]*)?>")
+    text = tag_regex.sub(_repl_existing_html, text)
+
+    # --- ШАГ 4: Экранируем весь оставшийся текст ---
+    # Теперь любой символ < или > превращается в &lt; / &gt;
+    text = html.escape(text, quote=False)
+
+    # --- ШАГ 5: Парсинг Markdown ---
     
-    # 8) Разбивка на части <= max_len с поддержкой корректного закрытия/переоткрытия тегов
-    messages = []
-    open_stack = []  # стек открытых тегов (полные открывающие строки)
-    i = 0
-    current = ""
-    # Помощники для нахождения тегов при проходе
-    tag_regex = re.compile(r"<\/?([a-zA-Z0-9-]+)(?:\s+[^>]*)?>")
-    while i < len(text):
-        ch = text[i]
-        current += ch
-        # после добавления символа, если мы закончили тег — обновляем стек
-        if ch == ">":
-            # проверим последний кусок на тег
-            m = re.search(r"<\/?([a-zA-Z0-9-]+)(?:\s+[^>]*)?>$", current)
-            if m:
-                full_tag = m.group(0)
-                tag_name = m.group(1).lower()
-                if full_tag.startswith("</"):
-                    # закрывающий — попытаемся убрать из стека (если совпадает)
-                    if open_stack and re.match(rf"<\s*{re.escape(tag_name)}(?:\s+[^>]*)?>", open_stack[-1], flags=re.IGNORECASE):
-                        open_stack.pop()
-                    else:
-                        # есть закрывающий без открывающего — добавим соответствующий открывающий в начало
-                        opening = f"<{tag_name}>"
-                        open_stack.insert(0, opening)  # добавить в начало (чтобы при split он будет в начале)
-                else:
-                    # открывающий — добавляем в стек
-                    open_stack.append(full_tag)
-        # если достигли лимита — закроем все открытые теги и начнём новый сегмент
-        if len(current) >= max_len:
-            # Закрываем все открытые в обратном порядке
-            closing = "".join(make_closing_tag(tag) for tag in reversed(open_stack))
-            fragment = current + closing
-            messages.append(fragment)
-            # Для следующей части — нужно повторно открыть теги
-            reopen = "".join(open_stack)
-            current = reopen  # начнём новую часть с восстановленных открывающих тегов
-        i += 1
+    # 5.1 Ссылки [text](url)
+    text = re.sub(r"\[([^\]\n]+)\]\(([^)\n]+)\)", r'<a href="\2">\1</a>', text)
 
-    if current:
-        # Закрываем всё, что осталось открытым
-        closing = "".join(make_closing_tag(tag) for tag in reversed(open_stack))
-        fragment = current + closing
-        messages.append(fragment)
+    # 5.2 Жирный **text**
+    text = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", text)
 
-    # 9) Финальная проверка: если какие-то части содержат незакрытые теги — дополнительно балансируем
-    balanced_messages = []
-    for msg in messages:
-        # Простой баланс по тегам (только для ALLOWED_TAGS)
-        opens = []
-        for m in tag_regex.finditer(msg):
-            full = m.group(0)
-            name = m.group(1).lower()
-            if full.startswith("</"):
-                # закрывающий
-                if opens and opens[-1].lower().startswith(f"<{name}"):
-                    opens.pop()
-                else:
-                    # лишний закрывающий — добавим соответствующий открывающий в начало
-                    msg = f"<{name}>" + msg
-            else:
-                # открывающий
-                opens.append(full)
-        # если что-то осталось открытым — закроем в конце
-        if opens:
-            closing = "".join(make_closing_tag(t) for t in reversed(opens))
-            msg = msg + closing
-        balanced_messages.append(msg)
+    # 5.3 Курсив *text* (избегаем совпадений с * в списках или формулах)
+    # (?<!\w) - * должен быть не сразу после буквы (чтобы не ломать 2*2)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
 
-    # Удаляем пустые строки, если есть
-    balanced_messages = [m for m in balanced_messages if m != ""]
+    # 5.4 Подчеркивание __text__
+    text = re.sub(r"__([^\n_]+)__", r"<u>\1</u>", text)
 
-    return balanced_messages
+    # 5.5 Спойлер ||text||
+    text = re.sub(r"\|\|([^\n|]+)\|\|", r"<tg-spoiler>\1</tg-spoiler>", text)
+    
+    # 5.6 Зачеркнутый ~text~ (иногда используется)
+    text = re.sub(r"~~([^\n~]+)~~", r"<s>\1</s>", text)
+
+    # --- ШАГ 6: Обработка цитат (>) ---
+    lines = text.split('\n')
+    out_lines = []
+    quote_buffer = []
+    
+    for line in lines:
+        stripped = line.lstrip()
+        # html.escape превратил '>' в '&gt;'
+        if stripped.startswith("&gt;"):
+            content = stripped[4:].lstrip() # убираем '&gt;' и пробел
+            quote_buffer.append(content)
+        else:
+            if quote_buffer:
+                out_lines.append(f"<blockquote expandable>{chr(10).join(quote_buffer)}</blockquote>")
+                quote_buffer = []
+            out_lines.append(line)
+            
+    if quote_buffer:
+        out_lines.append(f"<blockquote expandable>{chr(10).join(quote_buffer)}</blockquote>")
+    
+    text = "\n".join(out_lines)
+
+    # --- ШАГ 7: Возвращаем защищенные блоки ---
+    for token, content in protected_blocks.items():
+        text = text.replace(token, content)
+
+    # --- ШАГ 8: Умная разбивка ---
+    return split_html_text(text, max_len)
+
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (без изменений) ---
+
+def split_html_text(text: str, max_len: int) -> List[str]:
+    if len(text) <= max_len:
+        return [text]
+    parts = []
+    current_part = ""
+    open_tags_stack = []
+    # Разбиваем по тегам
+    tokens = re.split(r"(<\/?(?:[a-zA-Z0-9]+)(?:\s+[^>]*)?>)", text)
+    
+    for token in tokens:
+        if not token: continue
+        
+        # Считаем длину закрытия
+        closing_len = sum(len(f"</{get_tag_name(t)}>") for t in open_tags_stack)
+        
+        if len(current_part) + len(token) + closing_len > max_len:
+            # Закрываем
+            closer = "".join(f"</{get_tag_name(t)}>" for t in reversed(open_tags_stack))
+            parts.append(current_part + closer)
+            # Открываем заново
+            current_part = "".join(open_tags_stack)
+            
+        # Логика стека
+        if token.startswith("</"):
+            name = get_tag_name(token)
+            if open_tags_stack and get_tag_name(open_tags_stack[-1]) == name:
+                open_tags_stack.pop()
+        elif token.startswith("<") and not token.startswith("<?") and not token.startswith("<!"):
+             # Игнорируем <br>, <hr> если они вдруг есть (но мы их не генерим)
+             # Проверяем не самозакрывающийся ли тег (хотя в tg html таких почти нет)
+            if not token.endswith("/>"):
+                open_tags_stack.append(token)
+                
+        current_part += token
+
+    if current_part:
+        closer = "".join(f"</{get_tag_name(t)}>" for t in reversed(open_tags_stack))
+        parts.append(current_part + closer)
+        
+    return [p for p in parts if p]
+
+def get_tag_name(tag: str) -> str:
+    m = re.match(r"<\/?([a-zA-Z0-9]+)", tag)
+    return m.group(1).lower() if m else ""
+
+
+def make_closing_tag(opening_tag_str: str) -> str:
+    """Создает закрывающий тег для данного открывающего."""
+    name = get_tag_name(opening_tag_str)
+    return f"</{name}>" if name else ""
+
 
 
 
@@ -3060,7 +3029,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     save_history_func(chat_id, history_dict[chat_id])
 
                     try:
-                        html_parts = mdv2_to_html_messages(response_text)
+                        html_parts = clean_and_parse_html(response_text)
                         for part in html_parts:
                             sent_message = await update.message.reply_text(part, parse_mode='HTML')
                             bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
@@ -3132,7 +3101,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         gemini_context = f"История чата:\n{chat_context}\n"
 
                         gemini_response = await generate_gemini_response(current_request, gemini_context, chat_id)
-                        html_parts = mdv2_to_html_messages(gemini_response)
+                        html_parts = clean_and_parse_html(gemini_response)
                         for part in html_parts:
                             sent_message = await update.message.reply_text(part, parse_mode='HTML')
 
@@ -3208,7 +3177,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         save_history_func(chat_id, history_dict[chat_id])
 
                         await waiting_message.delete()
-                        html_parts = mdv2_to_html_messages(response_text)
+                        html_parts = clean_and_parse_html(response_text)
                         for part in html_parts:
                             sent_message = await update.message.reply_text(part, parse_mode='HTML')
 
@@ -3262,7 +3231,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         save_history_func(chat_id, history_dict[chat_id])
 
                         await waiting_message.delete()
-                        html_parts = mdv2_to_html_messages(response_text)
+                        html_parts = clean_and_parse_html(response_text)
                         for part in html_parts:
                             sent_message = await update.message.reply_text(part, parse_mode='HTML')
 
@@ -3330,7 +3299,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
                         save_history_func(chat_id, history_dict[chat_id])
 
-                        html_parts = mdv2_to_html_messages(response_text)
+                        html_parts = clean_and_parse_html(response_text)
                         for part in html_parts:
                             sent_message = await update.message.reply_text(part, parse_mode='HTML')
                         await waiting_message.delete()
@@ -3399,7 +3368,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             history_dict[chat_id] = history_dict[chat_id][-MAX_HISTORY_LENGTH:]
                         save_history_func(chat_id, history_dict[chat_id])
 
-                        html_parts = mdv2_to_html_messages(response_text)
+                        html_parts = clean_and_parse_html(response_text)
                         for part in html_parts:
                             sent_message = await update.message.reply_text(part, parse_mode='HTML')
                         await waiting_message.delete()
@@ -3472,7 +3441,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Это твой случайный комментарий в групповом чате, ты должна сымитировать реального участника чата в своём комментарии используя контекст последних сообщений",
                         chat_context, chat_id
                     )
-                    html_parts = mdv2_to_html_messages(spontaneous_response)
+                    html_parts = clean_and_parse_html(spontaneous_response)
                     for part in html_parts:
                         sent_message = await update.message.reply_text(part, parse_mode='HTML')
 
@@ -3766,7 +3735,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 gemini_context = f"История чата:\n{chat_context}\n"
 
                 gemini_response = await generate_gemini_response(current_request, gemini_context, chat_id)
-                html_parts = mdv2_to_html_messages(gemini_response)
+                html_parts = clean_and_parse_html(gemini_response)
                 for part in html_parts:
                     sent_message = await update.message.reply_text(part, parse_mode='HTML')
                 logger.info("Ответ Gemini: %s", gemini_response[:4096])
@@ -3855,7 +3824,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             try:
                 response = await generate_gemini_response(response_text, chat_context, chat_id)
-                html_parts = mdv2_to_html_messages(response)
+                html_parts = clean_and_parse_html(response)
                 for part in html_parts:
                     sent_message = await update.message.reply_text(part, parse_mode='HTML')
 
@@ -3981,7 +3950,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <b>Команды без дополнительного текста:</b>
 <code>/dh</code> — скачать историю чата
 <code>/dr</code> — скачать релевантную историю
-<code>/fr</code> — очистить историю чата
+<code>/fr</code> — очистить историю этого чата
 <code>/fgr</code> — очистить историю чата игровых ролей 
 <code>/sum</code> — пересказать историю чата за последнее время
 <code>/mental</code> — психическое состояние участников чата
@@ -4452,7 +4421,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 logger.info("Запрос: %s", gemini_context[:4096])
                 gemini_response = await generate_gemini_response(current_request, gemini_context, chat_id)
-                html_parts = mdv2_to_html_messages(gemini_response)
+                html_parts = clean_and_parse_html(gemini_response)
                 for part in html_parts:
                     sent_message = await update.message.reply_text(part, parse_mode='HTML')
 
@@ -9218,6 +9187,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
