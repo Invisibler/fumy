@@ -119,7 +119,8 @@ user_names_map = {
     "MrViolence": "Дмитрий",
     "alex_d_drake": "Дрейк",  
     "Antarien": "Антариен",  
-    "O_Zav": "Олег",      
+    "O_Zav": "Олег",  
+    "sir_de_relle": "Тихая Река",  
     # Добавьте другие username и реальные имена
 }
 
@@ -9205,6 +9206,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
