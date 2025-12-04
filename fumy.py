@@ -3983,6 +3983,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/sim</code> — симулировать участника чата или персонажа
 <code>/q</code> — задать вопрос игнорируя роль
 <code>/search</code> — задать вопрос игнорируя роль и контекст чата
+<code>/pro</code> — вопрос игнорируя роль/контекст, с разметкой
 <code>/time</code> — узнать когда произошло/произойдёт событие
 <code>/image</code> — сгенерировать изображение
 <code>/iq</code> — распределение IQ по шкале разумизма
@@ -4512,6 +4513,7 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
 async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_time = update.message.date.astimezone(utc_plus_3)
     if message_time < BOT_START_TIME:
@@ -4592,7 +4594,7 @@ async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TY
                   
                 except Exception as cleanup_error:
                     logger.warning(f"Не удалось удалить временный файл: {cleanup_error}")
-            chat_histories.pop(chat_id, None)
+            
         if is_reply_to_bot:
             try:
                 prompt = (
@@ -4614,16 +4616,15 @@ async def handle_static_sticker(update: Update, context: ContextTypes.DEFAULT_TY
                 save_chat_history_for_id(chat_id, chat_histories[chat_id])
                 bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
                 await waiting_message.delete()
-                chat_histories.pop(chat_id, None)
             except Exception as e:
                 logger.error(f"Ошибка при генерации ответа на стикер: {e}")
                 await waiting_message.edit_text("⚠️ Не удалось сгенерировать ответ на стикер.")
-
+        chat_histories.pop(chat_id, None)
     task = asyncio.create_task(background_sticker_processing())
     user_tasks_set = context.user_data.setdefault('user_tasks', set())
     user_tasks_set.add(task)
     task.add_done_callback(lambda t: _remove_task_from_context(t, context.user_data))
-    return
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -4729,11 +4730,11 @@ async def handle_video_sticker(update: Update, context: ContextTypes.DEFAULT_TYP
 
             bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             await waiting_message.delete()
-            chat_histories.pop(chat_id, None)   
+  
         except Exception as e:
             logger.error(f"Ошибка при генерации ответа на видеостикер: {e}")
             await waiting_message.edit_text("⚠️ Не удалось получить ответ на видеостикер. Попробуйте позже.")
-
+    chat_histories.pop(chat_id, None)
     task = asyncio.create_task(background_sticker_processing())
     user_tasks_set = context.user_data.setdefault('user_tasks', set())
     user_tasks_set.add(task)
@@ -4844,11 +4845,11 @@ async def handle_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
             await waiting_message.delete()
-            chat_histories.pop(chat_id, None)             
+          
         except Exception as e:
             logger.error(f"Ошибка при генерации ответа на GIF: {e}")
             await waiting_message.edit_text("⚠️ Не удалось получить ответ на GIF. Попробуйте позже.")
-
+    chat_histories.pop(chat_id, None)
     task = asyncio.create_task(background_gif_processing())
     user_tasks_set = context.user_data.setdefault('user_tasks', set())
     user_tasks_set.add(task)
@@ -5020,7 +5021,7 @@ async def mental_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             response = await generate_gemini_response(query, chat_context, chat_id)
             escaped_response = escape(response)
-            html_response = f"<blockquote>{escaped_response}</blockquote>"
+            html_response = f"<blockquote expandable>{escaped_response}</blockquote>"
 
             sent_message = await update.message.reply_text(html_response[:4096], parse_mode=ParseMode.HTML)
 
@@ -5683,27 +5684,22 @@ async def pro(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prompt = f"Текущий запрос: {user_message}\n\n"
     logger.info("Промпт для Gemini: %s", prompt)
-
-    google_search_tool = Tool(
-        google_search=GoogleSearch()
-    )
-
-    MODEL_NAME = "gemini-3-pro-preview"
-
+    
+    google_search_tool = Tool(google_search=GoogleSearch())
+    
     keys_to_try = key_manager.get_keys_to_try()
-
+    
+    # 1. Пробуем основную модель
     for key in keys_to_try:
         try:
             client = genai.Client(api_key=key)
-
             response = await client.aio.models.generate_content(
-                model=MODEL_NAME,
+                model=PRIMARY_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=1.4,
                     top_p=0.95,
                     top_k=25,
-                    max_output_tokens=8000,
                     tools=[google_search_tool],
                     safety_settings=[
                         types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
@@ -5713,31 +5709,77 @@ async def pro(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]
                 )
             )
-
             if response.candidates and response.candidates[0].content.parts:
                 await key_manager.set_successful_key(key)
-
                 generated_answer = "".join(
                     part.text for part in response.candidates[0].content.parts
                     if part.text and not getattr(part, "thought", False)
                 ).strip()
-
-                logger.info("Ответ от Gemini (%s): %s", MODEL_NAME, generated_answer)
-
-                parts = await send_reply_with_limit(generated_answer)
-                for part in parts:
+                logger.info("Ответ от Gemini: %s", generated_answer)
+                
+                # --- ИНТЕГРАЦИЯ НОВОЙ ФУНКЦИИ ---
+                messages_parts = clean_and_parse_html(generated_answer)
+                for part in messages_parts:
                     sent_message = await update.message.reply_text(
                         part,
-                        parse_mode=ParseMode.MARKDOWN_V2
+                        parse_mode=ParseMode.HTML
                     )
-                    bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-
+                    if chat_id not in bot_message_ids:
+                        bot_message_ids[chat_id] = []
+                    bot_message_ids[chat_id].append(sent_message.message_id)
                 return
-
+                # --------------------------------
+                
         except Exception as e:
-            logger.warning("Ошибка с ключом %s и моделью %s: %s", key, MODEL_NAME, e)
+            logger.warning("Ошибка с ключом %s и моделью %s: %s", key, PRIMARY_MODEL, e)
 
-    await update.message.reply_text("К сожалению, не удалось обработать запрос ни с одним ключом. Попробуйте позже.")
+    # 2. Если не вышло, пробуем запасные модели
+    for model in FALLBACK_MODELS:
+        for key in keys_to_try:
+            try:
+                client = genai.Client(api_key=key)
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=1.4,
+                        top_p=0.95,
+                        top_k=25,
+                        max_output_tokens=8000,
+                        tools=[google_search_tool],
+                        safety_settings=[
+                           types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                           types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                           types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                           types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                        ]
+                    )
+                )
+                if response.candidates and response.candidates[0].content.parts:
+                    await key_manager.set_successful_key(key)
+                    generated_answer = "".join(
+                        part.text for part in response.candidates[0].content.parts
+                        if part.text and not getattr(part, "thought", False)
+                    ).strip()
+                    logger.info("Ответ от Gemini (fallback %s): %s", model, generated_answer)
+                    
+                    # --- ИНТЕГРАЦИЯ НОВОЙ ФУНКЦИИ ---
+                    messages_parts = clean_and_parse_html(generated_answer)
+                    for part in messages_parts:
+                        sent_message = await update.message.reply_text(
+                            part,
+                            parse_mode=ParseMode.HTML
+                        )
+                        if chat_id not in bot_message_ids:
+                            bot_message_ids[chat_id] = []
+                        bot_message_ids[chat_id].append(sent_message.message_id)
+                    return
+                    # --------------------------------
+
+            except Exception as e:
+                logger.warning("Ошибка с ключом %s и fallback-моделью %s: %s", key, model, e)
+
+    await update.message.reply_text("К сожалению, не удалось обработать запрос ни с одним ключом и моделью. Попробуйте позже.")
 
 
 
@@ -5778,21 +5820,21 @@ async def question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def background_question():
         nonlocal prompt, chat_id
         google_search_tool = Tool(google_search=GoogleSearch())
-
+        
         success = False
-
-        # Перебор моделей только если все ключи не дали результата
+        
+        # Перебор моделей
         models_to_try = [PRIMARY_MODEL] + FALLBACK_MODELS
-
+        
         for model in models_to_try:
             if success:
                 break
-
+                
             keys_to_try = key_manager.get_keys_to_try()
             for key in keys_to_try:
                 try:
                     client = genai.Client(api_key=key)
-
+                    
                     response = await client.aio.models.generate_content(
                         model=model,
                         contents=prompt,
@@ -5810,16 +5852,24 @@ async def question(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             ]
                         )
                     )
-
+                    
                     if response.candidates and response.candidates[0].content.parts:
                         generated_answer = "".join(
                             part.text for part in response.candidates[0].content.parts
                             if part.text and not getattr(part, "thought", False)
                         ).strip()
-
-                        sent_message = await update.message.reply_text(generated_answer[:4096])
-                        bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
-
+                        
+                        # --- ИНТЕГРАЦИЯ НОВОЙ ФУНКЦИИ ---
+                        messages_parts = clean_and_parse_html(generated_answer)
+                        
+                        for part in messages_parts:
+                            sent_message = await update.message.reply_text(
+                                part, 
+                                parse_mode=ParseMode.HTML # Важно: используем HTML
+                            )
+                            bot_message_ids.setdefault(chat_id, []).append(sent_message.message_id)
+                        # --------------------------------
+                        
                         await key_manager.set_successful_key(key)
                         success = True
                         break
@@ -5828,12 +5878,11 @@ async def question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 except Exception as e:
                     logger.error("Ошибка при генерации (модель %s, ключ %s): %s", model, key, e)
-                    continue  # Пробуем следующий ключ
+                    continue 
 
         if not success:
             await update.message.reply_text("Извините, не удалось получить ответ — все ключи и модели дали ошибку.")
-
-        # Удаляем сообщение ожидания
+            
         try:
             await waiting_message.delete()
         except Exception as e:
@@ -9206,6 +9255,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
