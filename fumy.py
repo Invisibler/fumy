@@ -1374,8 +1374,12 @@ def log_with_number(message):
         f.write(f"\n\n=============================================================\n{log_counter}\n{message}\n")
     log_counter += 1
 
+import traceback
+
 async def generate_gemini_response(query, chat_context, chat_id):
     """Генерирует ответ от модели Gemini на текстовый запрос с учетом контекста чата и выбранной роли."""
+
+    last_error = None  # сюда будем сохранять последнюю ошибку
 
     role_key, user_role = load_chat_role(str(chat_id))
     logger.info(f"role_key: {role_key}, user_role: {user_role}")
@@ -1391,33 +1395,40 @@ async def generate_gemini_response(query, chat_context, chat_id):
     else:
         system_instruction = ROLES.get(role_key, ROLES["role0"])
 
+    # Вставка слова для role7
     if role_key == "role7":
-        word = chat_words.get(int(chat_id), "неизвестное слово")  # Защита от отсутствия слова
-        system_instruction = (system_instruction[0].format(word=word), system_instruction[1])      
+        word = chat_words.get(int(chat_id), "неизвестное слово")
+        system_instruction = (system_instruction[0].format(word=word), system_instruction[1])
 
+    # Контекст
     context = (
         f"У чата есть история диалога, используй её:\n\n{chat_context}\n\n"
-        f"Последние сообщения находятся внизу. Если есть вопросы, они вероятно связаны с этим. Квадратные скобки и прочая служебная информация нужны только для удобства просмотра истории, использовать их не нужно.\n\n"
-        f"Текущий запрос:\n{query}\n\n"     
-        f"Продолжи диалог как живой собеседник. Избегай фраз вроде Бот ответил...,избегай квадратных скобок или указания времени, они нужны только в истории"
+        f"Последние сообщения находятся внизу. Если есть вопросы, они вероятно связаны с этим. "
+        f"Квадратные скобки и прочая служебная информация нужны только для удобства просмотра истории, "
+        f"использовать их не нужно.\n\n"
+        f"Текущий запрос:\n{query}\n\n"
+        f"Продолжи диалог как живой собеседник. Избегай фраз вроде 'Бот ответил...', "
+        f"избегай квадратных скобок или указания времени — они нужны только в истории."
     )
-  
+
+    # Ролевой чат
     if int(chat_id) == -1002429128105:
         context += (
             "\n\nВажно: ты находишься в ролевом чате. "
             "В этом чате ты — жена пользователя с ником @gajinov. "
             "Отвечай с учётом этого контекста: веди себя как его игровая супруга."
         )
-      
-    system_instruction = system_instruction[0]  # только это отправляется в Gemini    
-    logger.info(f"system_instruction: {system_instruction}")     
-    # --- 1. Перебираем ключи только на PRIMARY_MODEL ---
+
+    system_instruction = system_instruction[0]
+    logger.info(f"system_instruction: {system_instruction}")
+
+    # --- 1. Основные ключи на PRIMARY_MODEL ---
     keys_to_try = key_manager.get_keys_to_try()
+
     for api_key in keys_to_try:
         try:
             logger.info(f"Попытка: модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
             client = genai.Client(api_key=api_key)
-
             google_search_tool = Tool(google_search=GoogleSearch())
 
             response = await client.aio.models.generate_content(
@@ -1448,25 +1459,28 @@ async def generate_gemini_response(query, chat_context, chat_id):
                 ).strip()
 
                 logger.info(f"Успех! Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
-                await key_manager.set_successful_key(api_key)  # Запоминаем удачный ключ
+                await key_manager.set_successful_key(api_key)
                 return bot_response
+
             else:
                 logger.warning(f"Gemini вернул пустой ответ. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}")
                 continue
 
-        except Exception as e:
-            logger.error(f"Ошибка при запросе к Gemini. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}. Ошибка: {e}")
+        except Exception:
+            last_error = traceback.format_exc()
+            logger.error(
+                f"Ошибка при запросе к Gemini. Модель='{PRIMARY_MODEL}', ключ=...{api_key[-4:]}.\n{last_error}"
+            )
             continue
 
-    # --- 2. Если все ключи упали — берём последний и пробуем FALLBACK_MODELS ---
+    # --- 2. Fallback-модели ---
     logger.warning("Все ключи упали на основной модели. Пробую fallback-модели.")
-    fallback_key = keys_to_try[-1]  # используем последний
+    fallback_key = keys_to_try[-1]
 
     for model_name in FALLBACK_MODELS:
         try:
             logger.info(f"Попытка: модель='{model_name}', ключ=...{fallback_key[-4:]}")
             client = genai.Client(api_key=fallback_key)
-
             google_search_tool = Tool(google_search=GoogleSearch())
 
             response = await client.aio.models.generate_content(
@@ -1498,17 +1512,27 @@ async def generate_gemini_response(query, chat_context, chat_id):
 
                 logger.info(f"Успех! Fallback-модель='{model_name}', ключ=...{fallback_key[-4:]}")
                 return bot_response
+
             else:
                 logger.warning(f"Fallback-модель вернула пустой ответ. Модель='{model_name}'")
                 continue
 
-        except Exception as e:
-            logger.error(f"Ошибка при запросе к Gemini. Fallback-модель='{model_name}', ключ=...{fallback_key[-4:]}. Ошибка: {e}")
+        except Exception:
+            last_error = traceback.format_exc()
+            logger.error(
+                f"Ошибка при запросе к Gemini. Fallback-модель='{model_name}', ключ=...{fallback_key[-4:]}.\n{last_error}"
+            )
             continue
 
-    # --- 3. Если и это не сработало ---
+    # --- 3. Полный провал ---
     logger.error("Полный провал: ни один API ключ и ни одна модель не сработали.")
-    return "Извините, сервис временно недоступен. Попробуйте повторить запрос позже."
+
+    return (
+        "Извините, сервис временно недоступен.\n\n"
+        f"Последняя ошибка:\n{last_error}"
+        if last_error else
+        "Извините, сервис временно недоступен (ошибка не зафиксирована)."
+    )
 
 
 
@@ -3979,7 +4003,7 @@ async def fhelp(update: Update, context: CallbackContext):
 <code>/rand</code> — случайный пост из паблика Anemone
 
 <b>Команды с текстом после них:</b>
-<code>/role</code> — выбрать роль для бота
+<code>/role</code> — выбрать или придумать роль для бота
 <code>/sim</code> — симулировать участника чата или персонажа
 <code>/q</code> — задать вопрос игнорируя роль
 <code>/search</code> — задать вопрос игнорируя роль и контекст чата
@@ -9255,6 +9279,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
