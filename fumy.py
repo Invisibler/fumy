@@ -5289,7 +5289,7 @@ async def rpg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f" Ответ должен быть логичным, соответствовать контексту текущей беседы."
     )
 
-   logger.info("Промпт для Gemini: %s", prompt)
+    logger.info("Промпт для Gemini: %s", prompt)
 
     # Запрос в модель
     waiting_message = await update.message.reply_text("Генерирую твои характеристики...")
@@ -9157,6 +9157,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
